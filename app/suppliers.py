@@ -25,6 +25,7 @@ COMPLAINTS = "supplier reviews / complaints"
 GOVERNMENT = "government / regulator"
 CLASSIFIEDS = "classifieds / used"
 DEALS = "deal forum (past deals)"
+SEARCH = "search results page"
 UNKNOWN = "unknown"
 
 
@@ -109,6 +110,9 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "popularmechanics.com": SupplierInfo("Popular Mechanics", REVIEW, "US"),
     "bobvila.com": SupplierInfo("Bob Vila", REVIEW, "US"),
     "thespruce.com": SupplierInfo("The Spruce", REVIEW, "US"),
+    "bing.com": SupplierInfo("Bing (search results)", SEARCH, None),
+    "duckduckgo.com": SupplierInfo("DuckDuckGo (search results)", SEARCH, None),
+    "search.yahoo.com": SupplierInfo("Yahoo (search results)", SEARCH, None),
     "slickdeals.net": SupplierInfo("Slickdeals", DEALS, "US"),
     "redflagdeals.com": SupplierInfo("RedFlagDeals", DEALS, "CA"),
     "camelcamelcamel.com": SupplierInfo("camelcamelcamel (Amazon price history)", DEALS, None),

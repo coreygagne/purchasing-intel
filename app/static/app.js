@@ -513,7 +513,7 @@ function qualityTab(res) {
       summ.overall_note ? h("p", {}, h("span", { class: "muted" }, `${summ.overall_note_label || "AI comment"}: `), summ.overall_note) : null,
       [["praise", "Recurring praise"], ["criticism", "Recurring criticism"], ["reliability_issues", "Reliability issues"]].map(([k, label]) =>
         h("div", {}, h("h4", {}, label), (summ[k] || []).length ? (summ[k] || []).map((p) => h("div", { class: "point" },
-          h("div", { class: "p" }, p.point, " ", p.source_ids.map((id) => srcRef(res, id))),
+          h("div", { class: "p" }, p.point, " ", p.source_ids.map((id) => [" ", srcRef(res, id)])),
           p.quotes.map((qt) => h("div", { class: "q" }, h("q", {}, qt))))) : h("p", { class: "empty" }, "None found in the sources.")))) :
       h("p", { class: "small muted" }, "AI summary is off (no Anthropic key configured). Below are the review sources and verbatim excerpts found by search."),
     h("div", { class: "grid-2" },

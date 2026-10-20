@@ -242,7 +242,7 @@ _SUFFIX_CODES = {"CAD", "USD", "EUR", "GBP", "CNY", "RMB", "AUD", "MXN", "JPY"}
 _AMOUNT = (r"\d{1,3}(?:\.\d{3})+,\d{1,2}(?!\d)|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+,\d{1,2}(?![\d,])|"
            r"\d+(?:\.\d{1,2})?")
 PRICE_RE = re.compile(
-    r"(?P<prefix>CA\$|C\$|CDN\$|CAD\s?\$|US\$|USD\s?\$|AU\$|A\$|NZ\$|HK\$|S\$|MX\$|\$|€|£|¥|"
+    r"(?P<prefix>CA\s?\$|C\s?\$|CDN\s?\$|CAD\s?\$|US\s?\$|USD\s?\$|AU\$|A\$|NZ\$|HK\$|S\$|MX\$|\$|€|£|¥|"
     r"\b(?:CAD|USD|EUR|GBP|CNY|RMB|MXN)\s)"
     r"\s?(?P<amount>" + _AMOUNT + r")"
     r"(?:\s?(?P<suffix>CAD|USD|EUR|GBP|CNY|AUD|MXN)\b)?"
@@ -255,10 +255,13 @@ SUFFIX_PRICE_RE = re.compile(
 
 _NOISE_BEFORE = re.compile(
     r"(save|saving|savings|off|over|under|orders?|rebate|credit|gift|coupon|reward|bonus|shipping on|"
-    r"spend|minimum|min\.|up to|starting fee|deposit|from as low as|financ|/mo|per month|was|reg\.?|regular|msrp|list)\s*[:]?\s*$",
+    r"spend|minimum|min\.|up to|starting fee|deposit|from as low as|financ|/mo|per month|was|reg\.?|regular|msrp|list|"
+    r"retail price|approximately|approx\.?|about|~|\+)\s*[:]?\s*$",
     re.I,
 )
-_NOISE_AFTER = re.compile(r"^\s*(off\b|rebate|in savings|gift card|/mo|per month|a month|monthly|instant savings|or more|\+ shipping on orders)", re.I)
+# a price followed by these words is a fee or saving, not the item's price ("+ $20.00 shipping")
+_NOISE_AFTER = re.compile(r"^\s*(off\b|rebate|in savings|gift card|/mo|per month|a month|monthly|instant savings|or more|"
+                          r"\+ shipping on orders|shipping\b|delivery fee|s&h|handling)", re.I)
 
 
 @dataclass
@@ -268,6 +271,8 @@ class PriceMatch:
     symbol: str
     raw: str
     high: float | None = None  # set when the text gives a range
+    start: int = -1            # position in the text it was found in
+    end: int = -1
 
     @property
     def is_range(self) -> bool:
@@ -318,7 +323,8 @@ def find_prices(text: str) -> list[PriceMatch]:
         high = _to_float(m.group("high")) if m.group("high") else None
         if high is not None and high <= amount:
             high = None
-        out.append(PriceMatch(amount, currency, m.group("prefix").strip(), m.group(0).strip(), high))
+        out.append(PriceMatch(amount, currency, m.group("prefix").strip(), m.group(0).strip(), high,
+                              m.start(), m.end()))
         taken.append((m.start(), m.end()))
     for m in SUFFIX_PRICE_RE.finditer(text):
         if any(s <= m.start() < e for s, e in taken):
@@ -330,7 +336,43 @@ def find_prices(text: str) -> list[PriceMatch]:
         if amount is None or amount <= 0:
             continue
         code = m.group("suffix").upper()
-        out.append(PriceMatch(amount, "CNY" if code == "RMB" else code, code, m.group(0).strip()))
+        out.append(PriceMatch(amount, "CNY" if code == "RMB" else code, code, m.group(0).strip(),
+                              start=m.start(), end=m.end()))
+    return sorted(out, key=lambda p: p.start)
+
+
+_COMPARATIVE_BEFORE = re.compile(r"\b(than|vs\.?|versus|compared(?: to| with)?|my|his|her|their|paid|spent|"
+                                 r"cost me|worth|saved|nearly|almost|pricey|hefty)\b[^$\d]{0,12}$", re.I)
+_PRICE_CUE_BEFORE = re.compile(r"(price|now|sale|our|your|only|buy|cost|for|at|each|from|\bea\b|:)\s*[^\s$]{0,12}\s*$",
+                               re.I)
+
+
+def listing_prices(text: str, tokens: list[str]) -> list[PriceMatch]:
+    """Prices in a search snippet that plausibly belong to the listed item.
+
+    Drops prices in comparisons or anecdotes ("more torque than my $800 Snap On"). With model numbers in
+    the request, keeps a price when the model is named within 150 characters before it (no other price in
+    between) or a price cue precedes it ("Price:", "Your Price", "now"). Without model numbers, only the
+    comparison filter applies."""
+    out = []
+    for p in find_prices(text):
+        before = text[max(0, p.start - 40): p.start]
+        if _COMPARATIVE_BEFORE.search(before):
+            continue
+        if not tokens:
+            out.append(p)
+            continue
+        cue = bool(_PRICE_CUE_BEFORE.search(before))
+        near = False
+        window_start = max(0, p.start - 150)
+        low = text.lower()
+        for tok in tokens:
+            mentions = list(_token_regex(tok).finditer(low, window_start, p.start))
+            if mentions and not find_prices(text[mentions[-1].end(): p.start]):
+                near = True
+                break
+        if cue or near:
+            out.append(p)
     return out
 
 
@@ -416,7 +458,8 @@ SHIPPING_RE = re.compile(
     r"free (?:standard |ground )?(?:shipping|delivery)(?: on (?:orders|purchases) (?:over|of) \$?\d+(?:\.\d\d)?\+?)?|"
     r"ships? (?:in|within) \d+(?:\s?-\s?\d+)? (?:business )?(?:days?|weeks?)|"
     r"(?:delivery|delivered) (?:in|within) \d+(?:\s?-\s?\d+)? (?:business )?(?:days?|weeks?)|"
-    r"(?:shipping|delivery)\s*[:]\s*(?:CA)?\$\d+(?:\.\d\d)?",
+    r"(?:shipping|delivery)\s*[:]\s*(?:CA)?\$\d+(?:\.\d\d)?|"
+    r"\+\s?(?:CA?\s?|US\s?)?\$\s?\d+(?:\.\d\d)?\s+(?:shipping|delivery)",
     re.I,
 )
 
@@ -433,13 +476,15 @@ def shipping_cost_from_text(text: str | None) -> float | None:
     t = text.lower()
     if t.startswith("free") and "over" not in t and " of " not in t:
         return 0.0
-    m = re.search(r"(?:shipping|delivery)\s*[:]\s*(?:ca)?\$(\d+(?:\.\d\d)?)", t)
+    m = re.search(r"(?:shipping|delivery)\s*[:]\s*(?:ca)?\$(\d+(?:\.\d\d)?)", t) or \
+        re.search(r"\+\s?(?:ca?\s?|us\s?)?\$\s?(\d+(?:\.\d\d)?)\s+(?:shipping|delivery)", t)
     if m:
         return float(m.group(1))
     return None
 
 
-AVAIL_RE = re.compile(r"\b(in stock|out of stock|sold out|backorder(?:ed)?|special order|discontinued|pre-?order|limited stock)\b", re.I)
+AVAIL_RE = re.compile(r"\b(in stock|out of stock|sold out|backorder(?:ed)?|special order|discontinued|pre-?order|"
+                      r"limited stock|currently unavailable|unavailable|no longer available|not available)\b", re.I)
 
 
 def availability_text(text: str) -> str | None:

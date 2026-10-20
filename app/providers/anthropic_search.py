@@ -1,4 +1,4 @@
-"""Anthropic web search (Claude's server-side `web_search` tool) as a web search provider.
+"""Anthropic web search (Claude's server-side `web_search` tool, basic version) as a web search provider.
 
 Anthropic runs the search on its own infrastructure, so this provider needs only
 outbound access to api.anthropic.com and an Anthropic API key - useful where the
@@ -79,7 +79,10 @@ class AnthropicSearchProvider:
 
     async def search(self, query: str, *, purpose: str, max_results: int = 8, depth: str = "basic",
                      country: str | None = None, include_raw: bool = False) -> list[SearchHit]:
-        tool: dict[str, Any] = {"type": "web_search_20260209", "name": "web_search",
+        # The basic tool version on purpose: with web_search_20260209 (dynamic filtering) the search runs
+        # inside code execution and the answer carries no citations, so there is no verbatim page text to
+        # use as evidence. web_search_20250305 returns citations with cited_text (verified live 2026-10-20).
+        tool: dict[str, Any] = {"type": "web_search_20250305", "name": "web_search",
                                 "max_uses": 2 if depth == "advanced" else 1}
         if country == "canada":
             tool["user_location"] = THUNDER_BAY

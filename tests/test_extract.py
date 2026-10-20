@@ -91,3 +91,38 @@ def test_structured_meta_fallback_and_bad_json():
 
 def test_no_structured_data_returns_empty():
     assert ex.structured_products("<html><body>No data</body></html>") == []
+
+
+def test_ebay_style_spaced_currency_prefixes():
+    # verbatim formats seen in live search results (2026-10-20)
+    got = ex.find_prices("Milwaukee 2767-20 C $235.20 Was C $294.00 (20% off)")
+    assert [(p.amount, p.currency) for p in got] == [(235.2, "CAD")]
+    # "Approximately C $..." is a converted display price, not the listing price
+    assert [(p.amount, p.currency) for p in ex.find_prices("Price: US $359.54 Approximately C $501.38")] == \
+        [(359.54, "USD")]
+    assert [(p.amount, p.currency) for p in ex.find_prices("**$389.00 CAD**")] == [(389.0, "CAD")]
+
+
+
+# Verbatim snippets returned by a live Anthropic web search on 2026-10-20 (real text, not invented).
+LIVE = {
+    "ebay_review": "… Has more torque than my $800 Snap On at almost a quarter of the price.",
+    "ebay_ca": "# Milwaukee M18 FUEL Impact Wrench - 2767-20 Price:  US $359.54  Approximately C $501.38  + $112.62 shipping  ## Oops!",
+    "dominion": "# Milwaukee ### $MIL 2767-20 GEN II HTIW 1/2\" RING BARE Part Number: 276720  Retail Price:  $414.00 / ea "
+                "Your Price:  $279.00 / ea Availability: Call",
+    "mississauga": "# Milwaukee 2767-20 M18 FUEL High Torque 1/2\"  Impact Wrench with Friction Ring (Tool Only) "
+                   "**$389.00 CAD**  Unit price /  **Unavailable**",
+    "kijiji": "Does not come with battery but can ...  NEW Milwaukee M18 FUEL High Torque 1/2\" Impact Wrench (2767-20)  $295.00",
+}
+
+
+def test_live_snippets_listing_prices():
+    t = ["2767-20"]
+    assert ex.listing_prices(LIVE["ebay_review"], t) == []                       # anecdote, not an offer
+    assert [(p.amount, p.currency) for p in ex.listing_prices(LIVE["ebay_ca"], t)] == [(359.54, "USD")]
+    assert ex.shipping_text(LIVE["ebay_ca"]) == "+ $112.62 shipping"
+    assert ex.shipping_cost_from_text(ex.shipping_text(LIVE["ebay_ca"])) == 112.62
+    assert [p.amount for p in ex.listing_prices(LIVE["dominion"], t)] == [279.0]  # "Retail Price" is list price
+    assert [(p.amount, p.currency) for p in ex.listing_prices(LIVE["mississauga"], t)] == [(389.0, "CAD")]
+    assert ex.availability_text(LIVE["mississauga"]) == "unavailable"
+    assert [p.amount for p in ex.listing_prices(LIVE["kijiji"], t)] == [295.0]

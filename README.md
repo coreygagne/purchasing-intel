@@ -53,7 +53,7 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 | **Tavily** (`TAVILY_API_KEY`), https://app.tavily.com | Recommended primary | Web search across manufacturers, distributors, marketplaces, reviews, forums; returns page text | 1,000 credits/month, no card | ~$30/mo for 4,000 credits; pay-as-you-go ~US$0.008/credit |
 | **SerpApi** (`SERPAPI_API_KEY`), https://serpapi.com | Optional (or the only provider) | Google Shopping **Canada** listings with structured prices, ratings and delivery terms; Google web results if Tavily isn't set | 250 searches/month | from ~US$25/mo for 1,000 searches |
 | **Anthropic Claude** (`ANTHROPIC_API_KEY`), https://console.anthropic.com | Optional | Understands plain-language requests, extracts prices from page text, summarizes reviews. Every extracted fact is checked word-for-word against the source; failures are discarded and counted. | none | Claude Opus 5.5: US$4 / US$20 per million input/output tokens |
-| **Anthropic web search** (same `ANTHROPIC_API_KEY`) | Alternative primary | Claude's server-side `web_search` tool. Anthropic runs the search, so only `api.anthropic.com` must be reachable. Used automatically when no Tavily/SerpApi key is set, or force it with `PI_SEARCH_PROVIDER=anthropic`. Snippets are built only from the citations' verbatim `cited_text`. | none | US$10 per 1,000 searches plus tokens for the results read: roughly US$0.05–0.15 per query on Claude Opus 5.5 (estimate; Sources tab shows actual usage) |
+| **Anthropic web search** (same `ANTHROPIC_API_KEY`) | Alternative primary | Claude's server-side `web_search` tool (`web_search_20250305`, which returns citations). Anthropic runs the search, so only `api.anthropic.com` must be reachable. Used automatically when no Tavily/SerpApi key is set, or force it with `PI_SEARCH_PROVIDER=anthropic`. Snippets are built only from the citations' verbatim `cited_text`. | none | US$10 per 1,000 searches plus tokens for the results read. Measured: about US$0.09 per query on Claude Opus 5.5, about US$0.72 for a quick research including AI reading |
 | **Bank of Canada Valet** | Built in | Daily FX rates (USD, EUR, CNY…→CAD) | free, no key | n/a |
 
 **Cost per research** (Tavily: basic search = 1 credit, advanced = 2):
@@ -181,7 +181,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 114 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 119 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
@@ -266,14 +266,36 @@ scripts/smoke_test.py   live check with real keys
 (`tests/test_review_fixes.py`), and mutation checks confirm the key tests fail if a fix is reverted. One
 residual risk is accepted for Phase 1 and listed under limitations (DNS rebinding).
 
-**Not yet run against a live search provider.** The build environment's network policy blocked
-api.tavily.com, serpapi.com and bankofcanada.ca, and no API key was available to the app.
-- **Verified live:** the network-refusal path for Tavily, and a real request to api.anthropic.com through the
-  Anthropic web-search provider. It returned "API key rejected (401)" with a placeholder key, which confirms
-  the SDK call, network route and error handling.
-- **Not yet verified:** a successful real search. Run `scripts/smoke_test.py` with a real key first. If a
-  provider has changed its response format, the error appears as "unexpected response format", not as wrong
-  data.
+**Live end-to-end test (2026-10-20, Anthropic web search + Claude Opus 5.5, quick depth).** The full workflow
+ran against the live provider: request → 6 real web searches → 40 real sources → evidence extraction with
+verbatim checks → comparison and recommendation → saved to SQLite → shown in the UI. For "Milwaukee 2767-20":
+- **Recommendation:** Amazon.ca at CAD 299.89, flagged as low-confidence evidence because the price came from
+  a site search-results page ("confirm the price on the listing itself").
+- **USD listings** (Walmart, eBay) were found but left out of the ranking, because the Bank of Canada rate
+  couldn't be fetched from that sandbox. The app says so; no rate was guessed.
+- **AI review summary:** 6 points, each with verbatim quotes and links, including Milwaukee's H96B service
+  issue.
+
+The live runs also exposed real bugs, now fixed and covered by tests using the captured real snippets:
+- `web_search_20260209` returns no citations, so there is no verbatim evidence; the app uses
+  `web_search_20250305`;
+- results from AI-suggested queries were never treated as sellers;
+- a review sentence ("more torque than my $800 Snap On") was read as a price;
+- "Retail price", "Approximately C $…" and "+ $X shipping" were read as listing prices, and the eBay
+  "C $235.20" format was not read at all;
+- "Unavailable" wasn't treated as out of stock;
+- search-results pages were treated like product pages.
+
+**Not verified live:**
+- Tavily and SerpApi: blocked by that sandbox's network. The code follows their documented formats, and the
+  network-refusal path was tested for real.
+- Bank of Canada FX lookups.
+- Direct supplier-page reading.
+
+**Measured cost (Claude Opus 5.5, quick depth = 3 planned + 3 AI-suggested searches):**
+- About 93k input and 14k output tokens plus 6 web searches, roughly US$0.72 per research.
+- Expect roughly US$1.00–1.10 for standard depth.
+- Using Tavily for search instead cuts this to the AI-reading portion only (about US$0.15).
 
 **Real-data dry run (development environment, 2026-10-20).** Three real web searches for "Milwaukee
 2767-20" were captured with the development assistant's own search tool and fed through the full engine:

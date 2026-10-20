@@ -73,7 +73,7 @@ async def test_results_and_verbatim_snippets_only():
     assert "$1.00" not in " ".join(h.snippet for h in hits)
     assert hits[0].published_date == "2 days ago" and hits[0].provider == "Anthropic web search"
     tool = msgs.calls[0]["tools"][0]
-    assert tool["type"] == "web_search_20260209" and tool["user_location"]["city"] == "Thunder Bay"
+    assert tool["type"] == "web_search_20250305" and tool["user_location"]["city"] == "Thunder Bay"
     assert msgs.calls[0]["fallbacks"] == "default"
     assert p.credits_used == 1 and p.tokens["input_tokens"] == 1200
 

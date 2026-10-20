@@ -221,7 +221,7 @@ class ResearchEngine:
 
             # 3. Evidence -----------------------------------------------------------------
             sources = build_sources(hits, identity.brand_words)
-            builder = OfferBuilder(identity.brand_words)
+            builder = OfferBuilder(identity.brand_words, identity.model_tokens)
             if ref_fetch is not None:
                 ref_src = add_source(sources, url=identity.reference_url or query, title=identity.name,
                                      snippet="Page you provided", purpose="input_url", provider="page fetch",

@@ -443,3 +443,36 @@ def test_deal_forums_are_not_sellers_and_manufacturer_notices_are_labelled(tmp_p
         groups = res["quality"]["sources_by_type"]
         assert any(k.startswith("Deal forum") for k in groups)
         assert any(k.startswith("Manufacturer statement") for k in groups)
+
+
+
+def test_ai_suggested_results_are_seller_candidates_and_search_pages_are_not():
+    from app.evidence import is_seller_source
+    hits = [SearchHit("T", "q", "ai_suggested", "https://mississaugahardware.com/products/milwaukee-2767-20",
+                      "Milwaukee 2767-20", "**$389.00 CAD**", 1),
+            SearchHit("T", "q", "wholesale", "https://www.bing.com/shop?q=Milwaukee+2767+20", "Bing", "$299.00", 2)]
+    s1, s2 = build_sources(hits, [])
+    assert is_seller_source(s1) and not is_seller_source(s2)
+
+
+def test_unavailable_listing_is_not_comparable(tmp_path):
+    fw = FakeWeb()
+    fw.tavily_results["price"][1]["content"] = "Acme TX-4400 torque widget **$339.00 CAD** Unit price / **Unavailable**"
+    fw.pages.pop("https://www.kmstools.com/acme-tx-4400-torque-widget")
+    with make_client(tmp_path, fw) as c:
+        res = result_of(c, research(c))
+        kms = next(o for o in res["offers"] if o["supplier"] == "KMS Tools")
+        assert kms["price"] == 339.0 and kms["currency"] == "CAD" and not kms["comparable"]
+        assert any("not available" in r for r in kms["exclusion_reasons"])
+
+
+
+def test_search_results_page_prices_are_low_confidence():
+    from app.evidence import is_search_results_url
+    for u in ("https://www.amazon.ca/s?k=milwaukee+2767-20", "https://www.ebay.com/sch/i.html?_nkw=2767-20",
+              "https://www.ebay.com/shop/2767-20-milwaukee?_nkw=2767+20", "https://www.bing.com/shop?q=x",
+              "https://shop.example.ca/search?q=2767-20"):
+        assert is_search_results_url(u), u
+    for u in ("https://www.amazon.ca/dp/B07XYZ", "https://www.kmstools.com/acme-tx-4400-torque-widget",
+              "https://www.ebay.ca/itm/236159710643"):
+        assert not is_search_results_url(u), u

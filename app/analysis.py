@@ -13,7 +13,7 @@ from collections import defaultdict
 from typing import Any
 
 from . import extract as ex
-from .evidence import Offer, Source, canonical_url
+from .evidence import Offer, Source, canonical_url, is_search_results_url
 from .fx import FxRate
 from .import_costs import delivered_estimate
 from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES, DEALS, DISTRIBUTOR, FORUM,
@@ -85,7 +85,8 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append(f"no exchange rate available for {o.currency}")
         if o.superseded():
             reasons.append("superseded by a more reliable price for the same listing")
-        if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued")):
+        if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued",
+                                                                "unavailable", "not available")):
             reasons.append(f"not available to buy ({o.availability})")
         if quantity and o.moq:
             nums = [int(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", o.moq)]
@@ -96,6 +97,9 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
         # informational flags
         if o.price_basis == "snippet" and o.comparable:
             o.flags.append("Price only seen in a search snippet - confirm on the supplier page.")
+        if is_search_results_url(o.url) and o.price is not None:
+            o.flags.append("Price seen on the site's search-results page, which lists several products or sellers - "
+                           "open it to confirm which listing this price belongs to.")
         if o.currency_basis.startswith("inferred"):
             o.flags.append(f"Currency {o.currency} {o.currency_basis}.")
         if o.country != "CA":
@@ -131,8 +135,9 @@ def detect_conflicts(offers: list[Offer]) -> list[dict[str, Any]]:
                 superseded = True
         if len(prices) > 1:
             detail = "; ".join(f"{fmt_money(o.price, o.currency)} ({o.price_basis.replace('_', ' ')})" for o in group)
-            outcome = (f"The page's own data ({fmt_money(best.price, best.currency)}) is used; the search-snippet "
-                       "price is shown for reference only." if superseded else
+            outcome = (f"The price from {PRICE_LABEL.get(best.price_basis, best.price_basis)} "
+                       f"({fmt_money(best.price, best.currency)}) is used; the search-snippet price is shown for "
+                       "reference only." if superseded else
                        "Both are shown; neither is preferred automatically.")
             conflicts.append({"type": "price_disagreement", "url": url, "supplier": best.supplier,
                               "offer_ids": [o.id for o in group],
@@ -257,6 +262,9 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
         + (" with page-level or listing-level price evidence." if strong else "."),
         f"Price evidence: {lowest.price_label}.",
     ]
+    if lowest.confidence == "low":
+        lowest_expl.append("Low-confidence evidence (search snippet or search-results page) - confirm the price on "
+                           "the listing itself before ordering.")
     if lowest.currency != "CAD":
         lowest_expl.append(f"Converted from {fmt_money(lowest.price, lowest.currency)} at {lowest.fx_rate} "
                            f"(Bank of Canada, {lowest.fx_date}).")

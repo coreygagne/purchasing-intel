@@ -20,7 +20,7 @@ from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COUNTRY_CURRENCY, DISTRIBU
                         MARKETPLACE, RETAILER, REVIEW_TYPES, UNKNOWN, classify_source, domain_of,
                         lookup_by_name)
 
-SELLER_PURPOSES = {"price", "suppliers", "wholesale", "cross_border", "input_url"}
+SELLER_PURPOSES = {"price", "suppliers", "wholesale", "cross_border", "input_url", "ai_suggested", "shopping"}
 SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN}
 
 PRICE_BASIS_LABELS = {
@@ -227,8 +227,9 @@ def _text_fields(title: str, body: str = "") -> dict[str, Any]:
 
 
 class OfferBuilder:
-    def __init__(self, brand_words: list[str]):
+    def __init__(self, brand_words: list[str], tokens: list[str] | None = None):
         self.brand_words = brand_words
+        self.tokens = tokens or []
         self.offers: list[Offer] = []
         self.unclear_sources: set[str] = set()  # pages showing several prices for the product
 
@@ -342,7 +343,7 @@ class OfferBuilder:
         """Price text visible in the search result itself (lowest confidence)."""
         text = f"{src.title}. {src.snippet}"
         quote = ex.quote_required(text)
-        prices = ex.find_prices(src.snippet) or ex.find_prices(src.title)
+        prices = ex.listing_prices(src.snippet, self.tokens) or ex.listing_prices(src.title, self.tokens)
         base = _base_offer(self._next_id(), src, url=src.url, supplier=None, title=src.title,
                            provider=src.provider, brand_words=self.brand_words)
         fields = _text_fields(src.title, src.snippet)
@@ -419,6 +420,15 @@ def _around(text: str, needle: str, width: int = 120) -> str:
     return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
 
 
+_SEARCH_PAGE_RE = re.compile(r"(/s\?|/search\b|/sch/|/shop\?|/shop/[^/?]*\?|[?&](q|k|_nkw|query|search_query|keyword|"
+                             r"searchterm|text)=)", re.I)
+
+
+def is_search_results_url(url: str) -> bool:
+    """A site's own search-results page lists many products/sellers; a price there is ambiguous."""
+    return bool(_SEARCH_PAGE_RE.search(url or ""))
+
+
 def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source]) -> None:
     for o in offers:
         if o.price_basis == "llm_verified":
@@ -434,6 +444,8 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
         if o.price_type == "quote_required":
             o.price_label = "Quote required"
         o.confidence = CONFIDENCE.get(o.price_basis, "n/a")
+        if is_search_results_url(o.url) and o.confidence in ("high", "medium"):
+            o.confidence = "low"
 
 
 def is_review_type(t: str) -> bool:
