@@ -96,3 +96,33 @@ async def test_proxy_refusal_is_reported_as_network(monkeypatch):
         await p.search("test", purpose="price")
     # Depending on the machine this is a network/proxy refusal or (with internet) an auth rejection.
     assert e.value.kind in {"network", "auth", "timeout"}
+
+
+async def test_tavily_retries_once_without_country_if_rejected():
+    seen = []
+
+    def handler(req):
+        import json as _json
+        body = _json.loads(req.content)
+        seen.append(body.get("country"))
+        if "country" in body:
+            return httpx.Response(400, json={"detail": {"error": "Invalid country"}})
+        return httpx.Response(200, json={"query": body["query"], "results": [
+            {"url": "https://www.kmstools.com/x", "title": "X", "content": "X $1.00", "score": 0.5}]})
+    p = TavilyProvider("tvly-test-key", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    hits = await p.search("x price", purpose="price", country="canada")
+    assert [h.url for h in hits] == ["https://www.kmstools.com/x"] and seen == ["canada", None]
+
+
+async def test_serpapi_web_retries_once_without_num_if_rejected():
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.params.get("num"))
+        if req.url.params.get("num"):
+            return httpx.Response(400, json={"error": "Unsupported `num` parameter."})
+        return httpx.Response(200, json={"organic_results": [{"link": "https://www.kmstools.com/x", "title": "X",
+                                                              "snippet": "X $1.00"}]})
+    p = SerpApiProvider("serp-key", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    hits = await p.search("x", purpose="price")
+    assert [h.url for h in hits] == ["https://www.kmstools.com/x"] and seen == ["8", None]

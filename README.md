@@ -204,8 +204,18 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 133 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 135 tests; 6 live-network tests are skipped unless enabled (below)
 ```
+
+**Live provider check** (real credits: about 5 Tavily credits and 3 SerpApi searches). It confirms that
+each provider's current response format still parses, that a bad key is reported as such, and that one full
+research completes on Tavily alone and is saved:
+
+```bash
+PI_NETWORK_TESTS=1 python -m pytest -q tests/test_live_providers.py   # keys from .env or the environment
+```
+
+Each test is skipped when its provider's key isn't set.
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
 **simulated web** in `tests/fakeweb.py`: fictional "Acme TX-4400" products, used only by tests. Covered:
@@ -336,8 +346,16 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
   fallback FX copy older than 10 days is rejected.
 
 **Not verified live:**
-- Tavily and SerpApi: blocked by that sandbox's network policy (the proxy refuses `api.tavily.com` and
-  `serpapi.com`). The code follows their documented formats, and the network-refusal path was tested for real.
+- **Tavily and SerpApi.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
+  403), and no keys for them were available. Their documentation sites didn't resolve from there either, so
+  the response formats couldn't be re-checked against current docs. What is tested:
+  - the parsing, error and credit code against simulated responses in their documented formats;
+  - the real network-refusal path (reported as "network unreachable", no results invented);
+  - a one-time retry without the optional `country` (Tavily) or `num` (SerpApi) parameter if the API rejects
+    it.
+
+  `tests/test_live_providers.py` is the one-command live check once a key and network access are available
+  (see Tests).
 - Direct (non-fallback) Bank of Canada and supplier-page reads: the code is the same as in tests, but that
   sandbox can't reach those sites. On a normal office network they are used first and the fallback stays idle.
 

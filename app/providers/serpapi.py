@@ -8,11 +8,14 @@ current plans on serpapi.com).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from .base import ProviderError, SearchHit, ShoppingListing, classify_http_error
+
+log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://serpapi.com/search.json"
 
@@ -93,7 +96,15 @@ class SerpApiProvider:
 
     async def search(self, query: str, *, purpose: str, max_results: int = 8, depth: str = "basic",
                      country: str | None = None, include_raw: bool = False) -> list[SearchHit]:
-        data = await self._get({"engine": "google", "q": query, "num": max(1, min(max_results, 20))})
+        params = {"engine": "google", "q": query, "num": max(1, min(max_results, 20))}
+        try:
+            data = await self._get(params)
+        except ProviderError as exc:
+            if exc.kind != "bad_request":
+                raise
+            # `num` is optional; if the API rejects it, retry once without it
+            log.warning("SerpApi rejected the request (%s); retrying without num", exc)
+            data = await self._get({k: v for k, v in params.items() if k != "num"})
         hits: list[SearchHit] = []
         for i, r in enumerate(data.get("organic_results") or []):
             if not isinstance(r, dict) or not r.get("link"):

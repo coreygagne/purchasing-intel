@@ -7,11 +7,14 @@ basic search = 1 credit, advanced = 2 credits; extract = 1 credit per 5 URLs.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from .base import ProviderError, SearchHit, classify_http_error
+
+log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://api.tavily.com/search"
 EXTRACT_URL = "https://api.tavily.com/extract"
@@ -79,7 +82,15 @@ class TavilyProvider:
         }
         if country:
             body["country"] = country
-        data = await self._post(SEARCH_URL, body)
+        try:
+            data = await self._post(SEARCH_URL, body)
+        except ProviderError as exc:
+            if exc.kind != "bad_request" or "country" not in body:
+                raise
+            # an optional boost the API rejects shouldn't fail the search; retry once without it
+            log.warning("Tavily rejected the request with country=%r (%s); retrying without it", country, exc)
+            body.pop("country")
+            data = await self._post(SEARCH_URL, body)
         usage = data.get("usage")
         if isinstance(usage, dict) and isinstance(usage.get("credits"), (int, float)):
             self.credits_used += float(usage["credits"])
