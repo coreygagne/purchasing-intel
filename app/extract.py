@@ -380,8 +380,8 @@ def pack_quantity(text: str) -> tuple[int, str] | None:
             before = (text or "")[max(0, m.start() - 30): m.start()].lower()
             if re.search(r"order|moq|min\.?|minimum|at least|up to|max", before):
                 continue  # an order quantity, not a pack size
-            if is_set and re.search(r"pcs|pieces|count|ct\b", m.group(0), re.I):
-                continue  # "Socket set (28 pcs)": pieces in one item, not 28 items
+            if is_set and re.search(r"pcs|pieces", m.group(0), re.I):
+                continue  # "Socket set (28 pcs)": pieces in one item; "kit refill, 100 count" stays a pack
             qty = int(m.group(1))
             if 1 < qty <= 100000:
                 return qty, m.group(0)

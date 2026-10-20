@@ -215,6 +215,11 @@ def set_compare_values(offers: list[Offer]) -> None:
 
 
 def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
+    """Lowest comparable price and best overall value.
+
+    Call after assess_comparability() and set_compare_values(), which decide which offers are
+    comparable and on what basis (listing vs per-unit price); analyze() does this in order.
+    """
     pool = [o for o in offers if o.comparable]
     notes: list[str] = []
     if not pool:

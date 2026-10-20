@@ -176,7 +176,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 97 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 99 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a

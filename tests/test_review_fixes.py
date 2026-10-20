@@ -327,6 +327,9 @@ def test_title_cleaning_keeps_model_numbers():
      "M18 REDLITHIUM 5.0Ah Battery $199.00", "$199.00", "M18 REDLITHIUM 5.0Ah Battery $199.00", False),
     # another price between the model and the quoted price (no other warning words)
     ("Milwaukee 2767-20 our price $379.00 | M18 Battery $199.00", "$199.00", "M18 Battery $199.00", False),
+    # round-3 cases: add-on and "sold separately" wording right after the model
+    ("Milwaukee 2767-20 Impact Wrench. Add a M18 battery: $199.00", "$199.00", "Add a M18 battery: $199.00", False),
+    ("Milwaukee 2767-20 bare tool, batteries sold separately. Kit price $599.00", "$599.00", "Kit price $599.00", False),
     # sibling kit named between the model and the price
     ("Milwaukee 2767-20 bare tool. Also available: 2767-22 kit with batteries $599.00", "$599.00",
      "2767-22 kit with batteries $599.00", False),
@@ -367,6 +370,7 @@ def test_bare_for_does_not_mark_genuine_listings_aftermarket():
 def test_set_piece_counts_are_not_pack_sizes():
     assert ex.pack_quantity("Socket set (28 pcs)") is None
     assert ex.pack_quantity("Nitrile gloves 100 count")[0] == 100
+    assert ex.pack_quantity("First aid kit refill, 100 count")[0] == 100
     assert ex.model_tokens("3M 8210 pack of 20") == ["8210"]
     assert ex.model_tokens("Makita 9557 in stock") == ["9557"]
 

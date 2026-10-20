@@ -159,7 +159,8 @@ def numbers_in(text: str) -> set[str]:
 RELATED_RE = re.compile(
     r"(you may also like|frequently bought|customers (?:also|who)|also bought|also viewed|related (?:products|items)|"
     r"similar (?:products|items)|recommended (?:for you|products|items)|people also|accessories|compare (?:with|to)|"
-    r"add-ons?|sponsored|bundle and save|complete the set|goes well with)",
+    r"add-ons?|sponsored|bundle and save|complete the set|goes well with|add an? |sold separately|also available|"
+    r"upgrade to|optional|save with|pair (?:it )?with)",
     re.I,
 )
 MAX_MODEL_TO_PRICE = 150
