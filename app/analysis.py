@@ -326,6 +326,22 @@ def _factor_points(scored: list[tuple[float, Offer, list[dict[str, Any]]]], offe
     return 0
 
 
+def spec_differences(offers: list[Offer]) -> list[dict[str, Any]]:
+    """Specs published in page data that differ between same-or-similar listings."""
+    relevant = [o for o in offers if o.specs and o.match_level in ("exact", "variant", "unverified", "compatible")]
+    by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for o in relevant:
+        for k, v in o.specs.items():
+            by_key[k.strip().lower()].append({"offer_id": o.id, "supplier": o.supplier, "value": v,
+                                              "match_level": o.match_level, "url": o.url})
+    out = []
+    for key, vals in by_key.items():
+        distinct = {re.sub(r"\s+", " ", str(v["value"]).strip().lower()) for v in vals}
+        if len(vals) >= 2 and len(distinct) > 1:
+            out.append({"spec": key, "values": vals})
+    return sorted(out, key=lambda d: d["spec"])
+
+
 # ------------------------------------------------------------------ quality
 
 
@@ -423,7 +439,8 @@ def channels(offers: list[Offer], sources: list[Source]) -> list[dict[str, Any]]
 
 
 def _lowest_label(priced: list[Offer]) -> str | None:
-    listed = [o for o in priced if o.price_type == "listed" and o.price_cad is not None]
+    """Lowest price in a channel, counting only comparable offers (same item, new, single price)."""
+    listed = [o for o in priced if o.comparable and o.price_cad is not None]
     if not listed:
         return None
     o = min(listed, key=lambda x: x.price_cad or 0)
@@ -442,7 +459,8 @@ def channel_opportunities(chs: list[dict[str, Any]], quantity: int | None) -> li
                         "supplier verification, sample/QC and landed-cost check (see Import tab).")
         if c["bulk_signals"]:
             names = ", ".join(sorted({b["supplier"] for b in c["bulk_signals"]})[:3])
-            tips.append(f"{names} mention bulk/volume pricing - ask for tier pricing at your quantity.")
+            verb = "mentions" if len({b["supplier"] for b in c["bulk_signals"]}) == 1 else "mention"
+            tips.append(f"{names} {verb} bulk/volume pricing - ask for tier pricing at your quantity.")
         if c["pack_sizes"]:
             tips.append("Multi-pack listings found - compare the per-unit price (shown in the table).")
     if quantity and quantity >= 10 and not any("quote" in t.lower() for t in tips):

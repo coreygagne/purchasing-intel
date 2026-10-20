@@ -431,6 +431,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         "channels": chs,
         "opportunities": an.channel_opportunities(chs, quantity),
         "alternatives": alternatives,
+        "spec_differences": an.spec_differences(offers),
         "alternatives_ai": alternatives_ai,
         "fx": {cur: asdict(r) for cur, r in fx.items() if cur != "CAD"},
         "import_notes": general_notes(home_province),

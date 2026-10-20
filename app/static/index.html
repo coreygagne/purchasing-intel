@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Purchasing Research</title>
+  <meta name="description" content="Midcontinent Terminal purchasing research: sourced price, quality and supplier comparisons.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23245b80'/%3E%3Cpath d='M8 21h16M10 21V12l6-3 6 3v9' stroke='white' stroke-width='2.5' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="#/"><b>Midcontinent Terminal</b><span>Purchasing research</span></a>
+      <nav class="topnav" aria-label="Main">
+        <a class="btn" href="#/">New search</a>
+        <button class="status-pill" id="status-pill" type="button" aria-live="polite"><i></i><span>Checking setup</span></button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="app" class="wrap">
+    <section class="hero" id="hero">
+      <h1>What do you need to buy?</h1>
+      <p class="lede">Enter a product name, model number, plain description or a product link. You get suppliers,
+        prices and quality evidence, and every number shows where it came from.</p>
+      <form id="search-form" role="search" autocomplete="off">
+        <div class="searchbox">
+          <label class="sr-only" for="q">Product, model, description or URL</label>
+          <input id="q" name="q" type="text" maxlength="600"
+                 placeholder="e.g. Milwaukee 2767-20, 3M 8210 respirator, 12/3 outdoor extension cord 50 ft, or a link">
+          <button class="btn primary" type="submit" id="search-btn">Research</button>
+        </div>
+        <div class="options">
+          <fieldset class="seg" aria-label="Search depth" style="border:0;padding:0;margin:0">
+            <label><input type="radio" name="depth" value="quick"><span>Quick</span></label>
+            <label><input type="radio" name="depth" value="standard" checked><span>Standard</span></label>
+            <label><input type="radio" name="depth" value="deep"><span>Deep</span></label>
+          </fieldset>
+          <label class="field-inline">Quantity needed <input type="number" id="qty" min="1" step="1" placeholder="optional"></label>
+          <span class="cost-hint" id="cost-hint"></span>
+        </div>
+      </form>
+      <div id="flash"></div>
+    </section>
+    <div id="view"></div>
+  </main>
+
+  <div class="wrap"><footer class="foot">Prices are observations from public sources at the time shown, not quotes.
+    Confirm price, specs, certifications and terms with the supplier before ordering.</footer></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

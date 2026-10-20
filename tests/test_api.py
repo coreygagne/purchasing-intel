@@ -301,3 +301,18 @@ def test_ai_layer_integration_with_verification(tmp_path):
         assert summary["verification"]["points_rejected"] == 1
         assert not any(o["price_basis"] == "llm_verified" for o in res["offers"])
         assert "llm_usage" in res["credits"]
+
+
+def test_spec_differences_from_page_data(tmp_path):
+    from tests.fakeweb import jsonld_page
+    fw = FakeWeb()
+    html = jsonld_page("Acme TX-4400 Torque Widget", "339.99", "CAD")
+    fw.pages["https://www.kmstools.com/acme-tx-4400-torque-widget"] = (200, html.replace(
+        '"sku": "SKU-998877"', '"sku": "SKU-998877", "additionalProperty": [{"name": "Max torque", "value": "400 ft-lb"}]'))
+    fw.pages["https://www.homedepot.ca/product/acme-tx-4400-kit/100200"] = (200, jsonld_page(
+        "Acme TX-4400 Torque Widget Kit", "429.00", "CAD").replace(
+        '"sku": "SKU-998877"', '"sku": "SKU-1", "additionalProperty": [{"name": "Max torque", "value": "350 ft-lb"}]'))
+    with make_client(tmp_path, fw) as c:
+        res = c.get(f"/api/comparisons/{research(c)['comparison_id']}").json()["result"]
+        [d] = res["spec_differences"]
+        assert d["spec"] == "max torque" and {v["value"] for v in d["values"]} == {"400 ft-lb", "350 ft-lb"}
