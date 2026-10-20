@@ -181,7 +181,8 @@ class ResearchEngine:
                 raise ResearchError("No search provider is configured.", kind="not_configured")
             fetcher = PageFetcher(client, user_agent=self.settings.fetch_user_agent,
                                   timeout_s=self.settings.fetch_timeout_s, max_bytes=self.settings.fetch_max_bytes,
-                                  respect_robots=self.settings.respect_robots_txt)
+                                  respect_robots=self.settings.respect_robots_txt,
+                                  allow_unresolved=self.settings.fetch_trust_proxy_dns)
             llm_usage: dict[str, Any] = {}
 
             # 1. Understand the request ------------------------------------------------

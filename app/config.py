@@ -52,6 +52,7 @@ class Settings:
     fetch_timeout_s: float = 8.0
     fetch_max_bytes: int = 2_000_000
     respect_robots_txt: bool = True
+    fetch_trust_proxy_dns: bool = False
     fetch_user_agent: str = (
         "Mozilla/5.0 (compatible; MidcontinentPurchasingResearch/0.1; "
         "+internal purchasing research tool)"
@@ -89,6 +90,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         fetch_max_pages=_int(env.get("FETCH_MAX_PAGES"), 10),
         fetch_timeout_s=_float(env.get("FETCH_TIMEOUT_S"), 8.0),
         respect_robots_txt=_bool(env.get("RESPECT_ROBOTS_TXT"), True),
+        fetch_trust_proxy_dns=_bool(env.get("FETCH_TRUST_PROXY_DNS"), False),
         search_timeout_s=_float(env.get("SEARCH_TIMEOUT_S"), 25.0),
         job_timeout_s=_float(env.get("JOB_TIMEOUT_S"), 420.0),
         duplicate_window_hours=_int(env.get("DUPLICATE_WINDOW_HOURS"), 12),

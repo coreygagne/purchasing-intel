@@ -83,8 +83,10 @@ redirect hop:
 - the host resolves (via the server's DNS) to public internet addresses only, so localhost, the office LAN and
   cloud-metadata addresses are refused.
 
-If the server can't resolve a host name, that page isn't read. Each page read and each whole research job
-also has a time limit (`FETCH_TIMEOUT_S`, `JOB_TIMEOUT_S`).
+If the server can't resolve a host name, that page isn't read. On proxy-only networks, where an HTTPS proxy
+resolves names for the server, set `FETCH_TRUST_PROXY_DNS=true` to allow public-looking names; internal
+names and IP addresses stay blocked. Each page read and each whole research job also has a time limit
+(`FETCH_TIMEOUT_S`, `JOB_TIMEOUT_S`).
 
 ---
 
@@ -179,7 +181,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 111 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 114 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
@@ -272,6 +274,20 @@ api.tavily.com, serpapi.com and bankofcanada.ca, and no API key was available to
 - **Not yet verified:** a successful real search. Run `scripts/smoke_test.py` with a real key first. If a
   provider has changed its response format, the error appears as "unexpected response format", not as wrong
   data.
+
+**Real-data dry run (development environment, 2026-10-20).** Three real web searches for "Milwaukee
+2767-20" were captured with the development assistant's own search tool and fed through the full engine:
+page reading, FX, analysis, saving and Excel export. That tool returns titles and URLs but no verbatim page
+text, so snippets were left empty, and every supplier page was unreachable from that sandbox. The app
+correctly reported:
+- no usable prices ("7 results name model 2767-20, but none showed a usable price");
+- the exact reason pages couldn't be read (host names couldn't be resolved);
+- deal-forum posts as past deals rather than offers;
+- the manufacturer's service notice for 2022 "H96B" units as a manufacturer statement.
+
+The run also exposed three bugs that the simulated web hadn't (a misleading gap message, a generic
+page-failure reason, deal forums treated as sellers); they are fixed and covered by tests. A run with a live
+provider key is still needed to see real prices.
 
 **Known limitations:**
 

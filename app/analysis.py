@@ -16,8 +16,8 @@ from . import extract as ex
 from .evidence import Offer, Source, canonical_url
 from .fx import FxRate
 from .import_costs import delivered_estimate
-from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES, DISTRIBUTOR, FORUM, GOVERNMENT,
-                        MANUFACTURER, MARKETPLACE, RETAILER, REVIEW, UNKNOWN, VIDEO)
+from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES, DEALS, DISTRIBUTOR, FORUM,
+                        GOVERNMENT, MANUFACTURER, MARKETPLACE, RETAILER, REVIEW, UNKNOWN, VIDEO)
 
 SUPPLIER_TYPE_POINTS = {DISTRIBUTOR: 15, MANUFACTURER: 15, RETAILER: 12, MARKETPLACE: 5, B2B_MARKETPLACE: 3,
                         CLASSIFIEDS: 0, UNKNOWN: 2}
@@ -382,7 +382,9 @@ def spec_differences(offers: list[Offer]) -> list[dict[str, Any]]:
 
 
 REVIEW_LABELS = {REVIEW: "Professional / editorial review", FORUM: "User discussion (anecdotal)",
-                 VIDEO: "Video review", COMPLAINTS: "Supplier reviews & complaints", GOVERNMENT: "Government / regulator"}
+                 VIDEO: "Video review", COMPLAINTS: "Supplier reviews & complaints", GOVERNMENT: "Government / regulator",
+                 MANUFACTURER: "Manufacturer statement (the maker's own claims or notices)",
+                 DEALS: "Deal forum (past sale prices, not current offers)"}
 
 
 def quality_evidence(sources: list[Source], offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
@@ -397,7 +399,7 @@ def quality_evidence(sources: list[Source], offers: list[Offer], tokens: list[st
     for s in sources:
         text = f"{s.title}. {s.snippet}"
         exact = bool(tokens) and ex.match_offer(tokens, text).level == "exact"
-        if s.type in REVIEW_LABELS or {"reviews", "issues"} & set(s.purposes):
+        if (s.type in REVIEW_LABELS and s.type != MANUFACTURER) or {"reviews", "issues"} & set(s.purposes):
             label = REVIEW_LABELS.get(s.type, "Other page found by review/issue search")
             groups[label].append({"source_id": s.id, "title": s.title, "url": s.url, "domain": s.domain,
                                   "excerpt": s.snippet[:400], "exact_model": exact,
@@ -449,7 +451,7 @@ def channels(offers: list[Offer], sources: list[Source]) -> list[dict[str, Any]]
         by_type[o.supplier_type].append(o)
     out = []
     for t, group in by_type.items():
-        if t in (REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT):
+        if t in (REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT, DEALS):
             continue
         priced = [o for o in group if o.price is not None]
         quotes = [o for o in group if o.price_type == "quote_required"]
@@ -507,6 +509,29 @@ def channel_opportunities(chs: list[dict[str, Any]], quantity: int | None) -> li
 # --------------------------------------------------------------------- gaps
 
 
+def _fetch_reason(error: str | None) -> str:
+    e = (error or "").lower()
+    if "could not resolve" in e:
+        return "host name could not be resolved (network/DNS)"
+    if "robots.txt" in e:
+        return "the site's robots.txt doesn't allow it"
+    if "private or internal" in e or "port" in e or "only http" in e:
+        return "link not allowed (safety check)"
+    if "403" in e or "blocked" in e:
+        return "blocked by the site"
+    if "login" in e or "401" in e:
+        return "login required"
+    if "timed out" in e or "gave up" in e:
+        return "timed out"
+    if "network error" in e:
+        return "network error"
+    if "404" in e or "not found" in e:
+        return "page not found"
+    if "not an html" in e:
+        return "not a web page"
+    return "other HTTP error"
+
+
 def gaps(offers: list[Offer], sources: list[Source], tokens: list[str], rec: dict[str, Any],
          fx_errors: dict[str, str], fetch_failures: int, fetch_attempts: int) -> list[str]:
     out = []
@@ -514,7 +539,15 @@ def gaps(offers: list[Offer], sources: list[Source], tokens: list[str], rec: dic
     if not priced:
         out.append("No published prices were found. Try a more specific name/model, or request quotes.")
     if tokens and not any(o.match_level == "exact" for o in offers):
-        out.append(f"No listing explicitly shows model {', '.join(tokens)}. Results may be for related items.")
+        seen = [s for s in sources if ex.match_offer(tokens, f"{s.title} {s.snippet}").level == "exact"]
+        if seen and not priced:
+            out.append(f"{len(seen)} result(s) name model {', '.join(tokens)}, but none showed a usable price - "
+                       "open them or request quotes.")
+        elif seen:
+            out.append(f"Model {', '.join(tokens)} appears in {len(seen)} result(s), but no priced listing "
+                       "confirms it exactly.")
+        else:
+            out.append(f"No result explicitly shows model {', '.join(tokens)}. Results may be for related items.")
     if priced and all(o.price_basis == "snippet" for o in priced):
         out.append("All prices come from search snippets (not read from the supplier pages) - treat as indicative.")
     if any(o.price is not None and o.country != "CA" for o in offers):
@@ -530,8 +563,13 @@ def gaps(offers: list[Offer], sources: list[Source], tokens: list[str], rec: dic
     for cur, err in fx_errors.items():
         out.append(f"{err}: {cur} prices could not be converted or compared.")
     if fetch_attempts and fetch_failures:
-        out.append(f"{fetch_failures} of {fetch_attempts} supplier pages could not be read directly (blocked, "
-                   "login required or timed out); their prices rely on search data.")
+        reasons: dict[str, int] = defaultdict(int)
+        for s in sources:
+            if s.fetch and not s.fetch.get("ok"):
+                reasons[_fetch_reason(s.fetch.get("error"))] += 1
+        detail = "; ".join(f"{n} x {r}" for r, n in sorted(reasons.items(), key=lambda kv: -kv[1]))
+        out.append(f"{fetch_failures} of {fetch_attempts} supplier pages could not be read directly ({detail}); "
+                   "their prices rely on search data.")
     if rec.get("pool_size", 0) == 1:
         out.append("Only one comparable listing - not enough for a meaningful comparison.")
     return out

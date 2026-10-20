@@ -396,3 +396,50 @@ def test_slow_ai_is_skipped_not_fatal(tmp_path, monkeypatch):
         res = result_of(c, research(c))
         assert res["recommendations"]["lowest"] is not None
         assert sum("took too long and was skipped" in g for g in res["gaps"]) == 2
+
+
+# --- Found by running the engine on real search results --------------------------------------------
+async def test_proxy_dns_option_allows_public_names_only(monkeypatch):
+    from app import fetch as f
+
+    async def no_dns(host):
+        raise OSError("no local DNS")
+    monkeypatch.setattr(f, "resolve_host", no_dns)
+    calls = []
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: calls.append(str(r.url)) or httpx.Response(200, text="<html>ok</html>",
+                                                             headers={"content-type": "text/html"})))
+    strict = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False)
+    assert "could not resolve" in (await strict.fetch("https://www.walmart.com/ip/1")).error
+    trusting = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False,
+                           allow_unresolved=True)
+    assert (await trusting.fetch("https://www.walmart.com/ip/1")).ok
+    for url in ("http://intranet.corp/x", "http://printer.local/", "http://localhost/", "http://10.0.0.5/"):
+        assert not (await trusting.fetch(url)).ok, url
+
+
+def test_gaps_report_real_reasons_and_model_mentions(tmp_path):
+    fw = FakeWeb()
+    for purpose in fw.tavily_results:
+        for r in fw.tavily_results[purpose]:
+            r["content"] = ""  # titles only, as with some real search tools
+    fw.pages = {}
+    with make_client(tmp_path, fw) as c:
+        res = result_of(c, research(c))
+        gaps = " | ".join(res["gaps"])
+        assert "name model TX-4400, but none showed a usable price" in gaps
+        assert "x page not found" in gaps and "blocked, login required or timed out" not in gaps
+
+
+def test_deal_forums_are_not_sellers_and_manufacturer_notices_are_labelled(tmp_path):
+    fw = FakeWeb(tavily_results={
+        "price": [tavily_result("https://slickdeals.net/f/123-acme-tx-4400-219", "Acme TX-4400 $219 (expired deal)",
+                                "Acme TX-4400 bare tool $219.00")],
+        "issues": [tavily_result("https://www.acme-example.com/news/tx-4400-notice", "Acme TX-4400 service notice",
+                                 "Some TX-4400 units sold in 2022 may stutter.")]})
+    with make_client(tmp_path, fw) as c:
+        res = result_of(c, research(c))
+        assert not any(o["supplier_domain"] == "slickdeals.net" for o in res["offers"])
+        groups = res["quality"]["sources_by_type"]
+        assert any(k.startswith("Deal forum") for k in groups)
+        assert any(k.startswith("Manufacturer statement") for k in groups)

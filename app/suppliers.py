@@ -24,6 +24,7 @@ VIDEO = "video"
 COMPLAINTS = "supplier reviews / complaints"
 GOVERNMENT = "government / regulator"
 CLASSIFIEDS = "classifieds / used"
+DEALS = "deal forum (past deals)"
 UNKNOWN = "unknown"
 
 
@@ -108,6 +109,10 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "popularmechanics.com": SupplierInfo("Popular Mechanics", REVIEW, "US"),
     "bobvila.com": SupplierInfo("Bob Vila", REVIEW, "US"),
     "thespruce.com": SupplierInfo("The Spruce", REVIEW, "US"),
+    "slickdeals.net": SupplierInfo("Slickdeals", DEALS, "US"),
+    "redflagdeals.com": SupplierInfo("RedFlagDeals", DEALS, "CA"),
+    "camelcamelcamel.com": SupplierInfo("camelcamelcamel (Amazon price history)", DEALS, None),
+    "ifixit.com": SupplierInfo("iFixit (repair guides)", FORUM, None),
     "trustpilot.com": SupplierInfo("Trustpilot", COMPLAINTS, None),
     "bbb.org": SupplierInfo("Better Business Bureau", COMPLAINTS, None),
     "sitejabber.com": SupplierInfo("Sitejabber", COMPLAINTS, None),
@@ -123,13 +128,16 @@ _TLD_COUNTRY = {
     ".ca": "CA", ".us": "US", ".co.uk": "GB", ".uk": "GB", ".cn": "CN", ".de": "DE", ".fr": "FR",
     ".it": "IT", ".es": "ES", ".nl": "NL", ".com.au": "AU", ".au": "AU", ".com.mx": "MX", ".mx": "MX",
     ".jp": "JP", ".in": "IN", ".kr": "KR", ".tw": "TW", ".hk": "HK", ".se": "SE", ".ch": "CH",
+    ".com.br": "BR", ".br": "BR", ".pl": "PL", ".be": "BE", ".at": "AT", ".dk": "DK", ".fi": "FI", ".no": "NO",
+    ".ie": "IE", ".nz": "NZ", ".sg": "SG", ".com.cn": "CN", ".vn": "VN", ".th": "TH", ".my": "MY", ".tr": "TR",
 }
 
 COUNTRY_NAMES = {
     "CA": "Canada", "US": "United States", "CN": "China", "GB": "United Kingdom", "DE": "Germany",
     "MX": "Mexico", "JP": "Japan", "AU": "Australia", "FR": "France", "IT": "Italy", "IN": "India",
     "KR": "South Korea", "TW": "Taiwan", "HK": "Hong Kong", "NL": "Netherlands", "ES": "Spain",
-    "SE": "Sweden", "CH": "Switzerland",
+    "SE": "Sweden", "CH": "Switzerland", "BR": "Brazil", "PL": "Poland", "IE": "Ireland", "NZ": "New Zealand",
+    "SG": "Singapore", "VN": "Vietnam", "TR": "Turkey",
 }
 
 COUNTRY_CURRENCY = {
@@ -138,7 +146,7 @@ COUNTRY_CURRENCY = {
     "HK": "HKD", "SE": "SEK", "CH": "CHF", "TW": "TWD",
 }
 
-REVIEW_TYPES = {REVIEW, FORUM, VIDEO, COMPLAINTS}
+REVIEW_TYPES = {REVIEW, FORUM, VIDEO, COMPLAINTS, DEALS}
 SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN}
 
 

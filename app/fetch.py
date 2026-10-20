@@ -54,8 +54,20 @@ def _public(ip: str) -> bool:
     return addr.is_global and not addr.is_multicast
 
 
-async def check_url(url: str) -> None:
-    """Raise BlockedURL unless `url` is a public http(s) address on a standard port."""
+_INTERNAL_SUFFIXES = (".local", ".internal", ".lan", ".corp", ".home", ".intranet", ".localdomain", ".arpa",
+                      ".localhost", ".test", ".invalid")
+
+
+def _public_looking_name(host: str) -> bool:
+    h = host.lower().rstrip(".")
+    return "." in h and not h.endswith(_INTERNAL_SUFFIXES) and h != "localhost"
+
+
+async def check_url(url: str, *, allow_unresolved: bool = False) -> None:
+    """Raise BlockedURL unless `url` is a public http(s) address on a standard port.
+
+    `allow_unresolved`: on proxy-only networks the server can't resolve public names itself; then a
+    public-looking host name (not an IP, not an internal suffix) is allowed and the proxy resolves it."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise BlockedURL("only http(s) links can be read")
@@ -76,6 +88,8 @@ async def check_url(url: str) -> None:
         try:
             ips = await resolve_host(host)
         except (OSError, UnicodeError) as exc:
+            if allow_unresolved and _public_looking_name(host):
+                return
             raise BlockedURL(f"could not resolve {host}") from exc
     if not ips or not all(_public(ip) for ip in ips):
         raise BlockedURL(f"{host} points to a private or internal network address")
@@ -83,8 +97,9 @@ async def check_url(url: str) -> None:
 
 class PageFetcher:
     def __init__(self, client: httpx.AsyncClient, *, user_agent: str, timeout_s: float,
-                 max_bytes: int, respect_robots: bool = True):
+                 max_bytes: int, respect_robots: bool = True, allow_unresolved: bool = False):
         self.client = client
+        self.allow_unresolved = allow_unresolved
         self.user_agent = user_agent
         self.timeout_s = timeout_s
         self.max_bytes = max_bytes
@@ -96,7 +111,7 @@ class PageFetcher:
         """GET with manual, checked redirects. Returns (response, body, final_url)."""
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            await check_url(current)
+            await check_url(current, allow_unresolved=self.allow_unresolved)
             async with self.client.stream(
                 "GET", current, timeout=self.timeout_s, follow_redirects=False,
                 headers={"User-Agent": self.user_agent, "Accept": accept, "Accept-Language": "en-CA,en;q=0.9"},
@@ -153,7 +168,7 @@ class PageFetcher:
 
     async def _fetch(self, url: str) -> FetchResult:
         try:
-            await check_url(url)
+            await check_url(url, allow_unresolved=self.allow_unresolved)
         except BlockedURL as exc:
             return FetchResult(url, False, None, None, f"Not fetched: {exc}", iso())
         allowed, reason = await self._allowed(url)
