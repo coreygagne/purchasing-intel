@@ -204,7 +204,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 135 tests; 6 live-network tests are skipped unless enabled (below)
+python -m pytest -q            # 136 tests; 6 live-network tests are skipped unless enabled (below)
 ```
 
 **Live provider check** (real credits: about 5 Tavily credits and 3 SerpApi searches). It confirms that
@@ -347,8 +347,14 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
 
 **Not verified live:**
 - **Tavily and SerpApi.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
-  403), and no keys for them were available. Their documentation sites didn't resolve from there either, so
-  the response formats couldn't be re-checked against current docs. What is tested:
+  403), and no keys for them were available. Their documentation sites couldn't be opened from there, but
+  search excerpts of the current docs (checked 2026-10-20) confirm two things:
+  - Tavily's `country` takes a lowercase English name ("canada", as sent) and applies only to the
+    `general` topic. `include_usage` returns the credits used, which the app now requests and reports.
+  - SerpApi's Google Shopping results carry `product_link`, `price` and `extracted_price`. The app uses a
+    direct merchant `link` when one is present and falls back to `product_link` when not.
+
+  What is tested:
   - the parsing, error and credit code against simulated responses in their documented formats;
   - the real network-refusal path (reported as "network unreachable", no results invented);
   - a one-time retry without the optional `country` (Tavily) or `num` (SerpApi) parameter if the API rejects

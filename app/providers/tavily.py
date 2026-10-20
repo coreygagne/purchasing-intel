@@ -78,7 +78,8 @@ class TavilyProvider:
             "include_answer": False,
             "include_raw_content": bool(include_raw),
             "include_images": False,
-            "topic": "general",
+            "include_usage": True,  # actual credits used, reported in the response's `usage`
+            "topic": "general",  # `country` only applies to the general topic
         }
         if country:
             body["country"] = country

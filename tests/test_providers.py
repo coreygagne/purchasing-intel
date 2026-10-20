@@ -126,3 +126,16 @@ async def test_serpapi_web_retries_once_without_num_if_rejected():
     p = SerpApiProvider("serp-key", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     hits = await p.search("x", purpose="price")
     assert [h.url for h in hits] == ["https://www.kmstools.com/x"] and seen == ["8", None]
+
+
+async def test_tavily_asks_for_and_uses_reported_credit_usage():
+    bodies = []
+
+    def handler(req):
+        import json as _json
+        bodies.append(_json.loads(req.content))
+        return httpx.Response(200, json={"query": "q", "results": [], "usage": {"credits": 2}})
+    p = TavilyProvider("tvly-test-key", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    await p.search("x price", purpose="price", country="canada")
+    assert bodies[0]["include_usage"] is True and bodies[0]["country"] == "canada" and bodies[0]["topic"] == "general"
+    assert p.credits_used == 2.0  # the reported figure, not the depth-based estimate (1)
