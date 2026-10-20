@@ -316,7 +316,9 @@ class ResearchEngine:
             errs = [pq.error for pq in plan if pq.error]
             first = fatal[0] if fatal else None
             msg = first.user_message if first else (errs[0]["message"] if errs else "all searches failed")
-            raise ResearchError(f"Search failed: {msg}", kind=first.kind if first else "search_failed", details=errs)
+            kinds = {e.get("kind") for e in errs if e}
+            kind = first.kind if first else (kinds.pop() if len(kinds) == 1 else "search_failed")
+            raise ResearchError(f"Search failed: {msg}", kind=kind, details=errs)
         return hits
 
     async def _fetch_and_extract(self, sources: list[Source], builder: OfferBuilder, identity: Identity,

@@ -100,6 +100,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if body.comparison_id is not None and not db.get_comparison(body.comparison_id):
             raise HTTPException(404, "Comparison not found")
         search_id = db.create_search(query, normalized, ex.classify_input(query), body.depth)
+        # Forget finished jobs after a while (results live in the database, not here)
+        for jid in [j.id for j in jobs.values() if j.status != "running" and len(jobs) > 200]:
+            jobs.pop(jid, None)
         job = Job(id=uuid.uuid4().hex[:12], search_id=search_id, query=query)
         jobs[job.id] = job
 

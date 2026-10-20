@@ -316,3 +316,19 @@ def test_spec_differences_from_page_data(tmp_path):
         res = c.get(f"/api/comparisons/{research(c)['comparison_id']}").json()["result"]
         [d] = res["spec_differences"]
         assert d["spec"] == "max torque" and {v["value"] for v in d["values"]} == {"400 ft-lb", "350 ft-lb"}
+
+
+def test_network_outage_reports_network_kind(tmp_path):
+    import httpx
+
+    fw = FakeWeb()
+
+    def unreachable(request):
+        if request.url.host == "api.tavily.com":
+            raise httpx.ConnectError("connection refused", request=request)
+        return None
+    fw.extra_handlers.append(unreachable)
+    with make_client(tmp_path, fw) as c:
+        job = research(c)
+        assert job["status"] == "failed" and job["error"]["kind"] == "network"
+        assert c.get("/api/comparisons").json() == []
