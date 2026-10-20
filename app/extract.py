@@ -1,0 +1,632 @@
+"""Deterministic evidence extraction from text and HTML.
+
+Everything here only *reads* what a source says. Nothing is guessed: if a
+value cannot be found it is returned as None and reported as missing.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+from urllib.parse import unquote, urlparse
+
+from bs4 import BeautifulSoup
+
+# --------------------------------------------------------------------- input
+
+
+URL_RE = re.compile(r"^\s*https?://\S+\s*$", re.I)
+
+_UNIT_SUFFIX = (
+    r"(?:v|vac|vdc|volt|volts|ft|feet|in|inch|inches|mm|cm|m|km|lb|lbs|kg|g|oz|gal|l|ml|w|kw|"
+    r"kva|a|ah|amp|amps|psi|bar|hp|rpm|pack|pk|pc|pcs|ct|mah|gauge|ga|awg|mil|tpi|cfm|gpm|btu|"
+    r"x|nm|k|s|st|nd|rd|th|yr|yrs|year|years|mo|day|days|deg|f|c|mp|gb|tb|mb|hz|khz|mhz|ghz|"
+    r"mpa|kpa|t|ton|tons|qt|pt|sqft|cu|cuft|lm|db|ohm|mph)"
+)
+_UNIT_TOKEN_RE = re.compile(rf"^\d+(?:[.,]\d+)?{_UNIT_SUFFIX}$", re.I)
+_DIM_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?[a-z]*$", re.I)
+
+
+def classify_input(text: str) -> str:
+    """Return 'url', 'model' (contains a model/part number) or 'text'."""
+    if URL_RE.match(text):
+        return "url"
+    return "model" if model_tokens(text) else "text"
+
+
+def normalize_query(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def model_tokens(text: str) -> list[str]:
+    """Find likely model / part numbers (e.g. 2767-20, DCF887B, 8210).
+
+    Conservative on purpose: units (18V, 50ft), fractions (1/2) and short
+    tokens (M18, N95) are not treated as model identifiers.
+    """
+    found: list[str] = []
+    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9\-./]*[A-Za-z0-9]", text):
+        tok = tok.strip(".-/")
+        if "/" in tok or len(tok) < 4:
+            continue
+        if re.fullmatch(r"(?:19|20)\d\d", tok):  # a year
+            continue
+        digits = sum(ch.isdigit() for ch in tok)
+        letters = sum(ch.isalpha() for ch in tok)
+        if digits == 0:
+            continue
+        if _UNIT_TOKEN_RE.match(tok) or _DIM_TOKEN_RE.match(tok):
+            continue
+        if letters == 0 and "-" not in tok and digits < 4:
+            continue
+        if letters > 0 and digits < 2:
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?", tok) and "." in tok:
+            continue
+        if tok.lower() not in (t.lower() for t in found):
+            found.append(tok)
+    return found
+
+
+def product_key_for(identity_name: str, tokens: list[str]) -> str:
+    """Stable key used to group price observations over time."""
+    if tokens:
+        return "model:" + "|".join(sorted(re.sub(r"[^a-z0-9]", "", t.lower()) for t in tokens))
+    return "query:" + re.sub(r"[^a-z0-9]+", " ", identity_name.lower()).strip()
+
+
+def words_from_url(url: str) -> str:
+    """Readable words from a product URL's path (used only if the page can't be read)."""
+    path = unquote(urlparse(url).path)
+    parts = [p for p in re.split(r"[/_\-+.]", path) if p and not re.fullmatch(r"\d{6,}|html?|php|aspx?|p|dp|product|products|item|ip", p, re.I)]
+    return " ".join(parts)[:150]
+
+
+# --------------------------------------------------------------------- match
+
+
+@dataclass
+class MatchResult:
+    level: str  # exact | variant | different | unverified
+    notes: list[str] = field(default_factory=list)
+
+
+COMPAT_RE = re.compile(
+    r"\b(compatible(?: with)?|replacement for|replaces|fits|for use with|aftermarket|generic|knock[- ]?off|"
+    r"replica|equivalent to|alternative to|substitute for|non[- ]oem)\b",
+    re.I,
+)
+
+
+def _norm_text(text: str) -> str:
+    return " " + re.sub(r"[^a-z0-9]+", " ", text.lower()) + " "
+
+
+def _split_model(token: str) -> tuple[str, str | None]:
+    t = token.lower()
+    if "-" in t:
+        base, _, suffix = t.partition("-")
+        return re.sub(r"[^a-z0-9]", "", base), re.sub(r"[^a-z0-9]", "", suffix) or None
+    m = re.fullmatch(r"([a-z]*\d+)([a-z]+\d*)", re.sub(r"[^a-z0-9]", "", t))
+    if m:
+        return m.group(1), m.group(2)
+    return re.sub(r"[^a-z0-9]", "", t), None
+
+
+def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
+    """Compare an offer's text with the requested model numbers."""
+    if not target_tokens:
+        return MatchResult("unverified", ["No model number in the request - equivalence must be checked against specs."])
+    text = _norm_text(offer_text)
+    squashed = re.sub(r"\s+", "", text)
+    exact, variants, missing = [], [], []
+    for tok in target_tokens:
+        base, suffix = _split_model(tok)
+        full = re.sub(r"[^a-z0-9]", "", tok.lower())
+        parts = [p for p in re.split(r"[^a-z0-9]+", tok.lower()) if p]
+        if len(parts) == 1 and suffix:
+            parts = [base, suffix]
+        pattern = r"\s" + r"\s?".join(re.escape(p) for p in parts) + r"\s"
+        if re.search(pattern, text) or (len(full) >= 6 and f" {full} " in text):
+            exact.append(tok)
+            continue
+        # base found with a different suffix -> a different kit / variant
+        if len(base) >= 3:
+            sep = r"\s?" if suffix is not None else ""
+            m = re.search(rf"\s{re.escape(base)}{sep}([a-z0-9]{{1,6}})\s", text)
+            if m and m.group(1) != suffix:
+                shown = f"{base.upper()}-{m.group(1).upper()}" if suffix is not None else f"{base.upper()}{m.group(1).upper()}"
+                variants.append(f"{tok} requested; listing shows {shown}")
+                continue
+            if suffix is not None and re.search(rf"\s{re.escape(base)}\s", text):
+                variants.append(f"Base model {base.upper()} found but suffix '{suffix.upper()}' not confirmed")
+                continue
+        if len(full) >= 6 and full in squashed:
+            exact.append(tok)
+            continue
+        missing.append(tok)
+    if exact and not variants and not missing:
+        compat = COMPAT_RE.search(offer_text)
+        if compat:
+            return MatchResult("compatible", [f"Listing mentions the model but says '{compat.group(0)}' - likely a "
+                                              "compatible/aftermarket item, not the original."])
+        return MatchResult("exact", [f"Model {', '.join(exact)} appears in the listing."])
+    if variants:
+        return MatchResult("variant", variants + ([f"Not found: {', '.join(missing)}"] if missing else []))
+    if exact and missing:
+        return MatchResult("variant", [f"Matched {', '.join(exact)} but not {', '.join(missing)}."])
+    return MatchResult("different", [f"Requested model {', '.join(target_tokens)} not found in listing text."])
+
+
+CONDITION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("refurbished", re.compile(r"\b(refurbished|renewed|reconditioned|remanufactured|recertified|factory[- ]reconditioned)\b", re.I)),
+    ("used", re.compile(r"\b(used|pre[- ]owned|second[- ]hand|for parts)\b", re.I)),
+    ("open box", re.compile(r"\bopen[- ]box\b", re.I)),
+]
+
+
+def detect_condition(text: str) -> str | None:
+    for label, pat in CONDITION_PATTERNS:
+        if pat.search(text):
+            return label
+    return None
+
+
+def condition_from_schema(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = value.lower()
+    if "new" in v:
+        return "new"
+    if "refurb" in v:
+        return "refurbished"
+    if "used" in v:
+        return "used"
+    if "damaged" in v:
+        return "damaged"
+    return None
+
+
+# --------------------------------------------------------------------- price
+
+_CURRENCY_PREFIX = {
+    "ca$": "CAD", "c$": "CAD", "cdn$": "CAD", "cad$": "CAD", "cad": "CAD",
+    "us$": "USD", "usd$": "USD", "usd": "USD",
+    "au$": "AUD", "a$": "AUD", "nz$": "NZD", "hk$": "HKD", "s$": "SGD",
+    "€": "EUR", "eur": "EUR", "£": "GBP", "gbp": "GBP", "¥": "CNY", "cny": "CNY", "rmb": "CNY",
+    "mx$": "MXN", "mxn": "MXN",
+}
+_SUFFIX_CODES = {"CAD", "USD", "EUR", "GBP", "CNY", "RMB", "AUD", "MXN", "JPY"}
+
+_AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?"
+PRICE_RE = re.compile(
+    r"(?P<prefix>CA\$|C\$|CDN\$|CAD\s?\$|US\$|USD\s?\$|AU\$|A\$|NZ\$|HK\$|S\$|MX\$|\$|€|£|¥|"
+    r"\b(?:CAD|USD|EUR|GBP|CNY|RMB|MXN)\s)"
+    r"\s?(?P<amount>" + _AMOUNT + r")"
+    r"(?:\s?(?P<suffix>CAD|USD|EUR|GBP|CNY|AUD|MXN)\b)?"
+    r"(?:\s?(?:-|–|to)\s?(?:CA\$|C\$|US\$|\$|€|£|¥)?\s?(?P<high>" + _AMOUNT + r"))?",
+    re.I,
+)
+SUFFIX_PRICE_RE = re.compile(
+    r"(?<![\w.,])(?P<amount>" + _AMOUNT + r")\s?(?P<suffix>CAD|USD|EUR|GBP|CNY|RMB|AUD|MXN)\b"
+)
+
+_NOISE_BEFORE = re.compile(
+    r"(save|saving|savings|off|over|under|orders?|rebate|credit|gift|coupon|reward|bonus|shipping on|"
+    r"spend|minimum|min\.|up to|starting fee|deposit|from as low as|financ|/mo|per month|was|reg\.?|regular|msrp|list)\s*[:]?\s*$",
+    re.I,
+)
+_NOISE_AFTER = re.compile(r"^\s*(off\b|rebate|in savings|gift card|/mo|per month|a month|monthly|instant savings|or more|\+ shipping on orders)", re.I)
+
+
+@dataclass
+class PriceMatch:
+    amount: float
+    currency: str | None  # ISO code, or None when only an ambiguous "$" was shown
+    symbol: str
+    raw: str
+    high: float | None = None  # set when the text gives a range
+
+    @property
+    def is_range(self) -> bool:
+        return self.high is not None
+
+
+def _to_float(s: str) -> float | None:
+    try:
+        return float(s.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def find_prices(text: str) -> list[PriceMatch]:
+    """All plausible product prices in `text`, skipping discounts/thresholds."""
+    out: list[PriceMatch] = []
+    if not text:
+        return out
+    taken: list[tuple[int, int]] = []
+    for m in PRICE_RE.finditer(text):
+        before = text[max(0, m.start() - 25): m.start()]
+        after = text[m.end(): m.end() + 25]
+        if _NOISE_BEFORE.search(before) or _NOISE_AFTER.match(after):
+            continue
+        amount = _to_float(m.group("amount"))
+        if amount is None or amount <= 0:
+            continue
+        prefix = m.group("prefix").strip().lower().replace(" ", "")
+        suffix = (m.group("suffix") or "").upper()
+        currency = _CURRENCY_PREFIX.get(prefix)
+        if suffix:
+            currency = "CNY" if suffix == "RMB" else suffix
+        high = _to_float(m.group("high")) if m.group("high") else None
+        if high is not None and high <= amount:
+            high = None
+        out.append(PriceMatch(amount, currency, m.group("prefix").strip(), m.group(0).strip(), high))
+        taken.append((m.start(), m.end()))
+    for m in SUFFIX_PRICE_RE.finditer(text):
+        if any(s <= m.start() < e for s, e in taken):
+            continue
+        before = text[max(0, m.start() - 25): m.start()]
+        if _NOISE_BEFORE.search(before):
+            continue
+        amount = _to_float(m.group("amount"))
+        if amount is None or amount <= 0:
+            continue
+        code = m.group("suffix").upper()
+        out.append(PriceMatch(amount, "CNY" if code == "RMB" else code, code, m.group(0).strip()))
+    return out
+
+
+def parse_price_text(text: str) -> PriceMatch | None:
+    """Parse a short price string such as '$349.00' or 'CA$1,299.99'."""
+    found = find_prices(text)
+    if found:
+        return found[0]
+    # bare number (e.g. a JSON-LD "price": "349.00")
+    m = re.fullmatch(r"\s*(" + _AMOUNT + r")\s*", text or "")
+    if m:
+        v = _to_float(m.group(1))
+        if v is not None:
+            return PriceMatch(v, None, "", text.strip())
+    return None
+
+
+QUOTE_RE = re.compile(
+    r"request (?:a )?quote|call for pric|contact (?:us )?for (?:a )?(?:pric|quote)|price on request|"
+    r"pricing (?:available )?(?:up)?on request|(?:log ?in|sign ?in) (?:to|for) (?:see |view )?(?:your )?pric|"
+    r"\bRFQ\b|get a quote|request pricing|quote required|call for quote|ask for (?:a )?quote",
+    re.I,
+)
+
+
+def quote_required(text: str) -> str | None:
+    m = QUOTE_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+PACK_PATTERNS = [
+    re.compile(r"\b(?:pack|box|case|bag|carton|bundle|set|lot|pail|tub|roll)\s+of\s+(\d{1,5})\b", re.I),
+    re.compile(r"\b(\d{1,5})\s?(?:-|\s)?(?:pack|pk|pkg|pcs|pieces|count|ct|units|per box|per case|/box|/case|/pk|/pack|/bag)\b", re.I),
+    re.compile(r"\((\d{1,5})\s?(?:pk|pack|pcs|ct|count)\)", re.I),
+    re.compile(r"\bqty[:\s]+(\d{1,5})\b", re.I),
+]
+
+
+def pack_quantity(text: str) -> tuple[int, str] | None:
+    """Units per listing if the listing states a pack/box/case size."""
+    for pat in PACK_PATTERNS:
+        for m in pat.finditer(text or ""):
+            before = (text or "")[max(0, m.start() - 30): m.start()].lower()
+            if re.search(r"order|moq|min\.?|minimum|at least|up to|max", before):
+                continue  # an order quantity, not a pack size
+            qty = int(m.group(1))
+            if 1 < qty <= 100000:
+                return qty, m.group(0)
+    return None
+
+
+MOQ_RE = re.compile(
+    r"(?:\bMOQ\b|min(?:imum)?\.?\s*order(?:\s*(?:quantity|qty))?)\s*[:：]?\s*(?:is\s*)?(\d[\d,]*)\s*([A-Za-z]+)?",
+    re.I,
+)
+
+
+def moq_text(text: str) -> str | None:
+    m = MOQ_RE.search(text or "")
+    return m.group(0).strip() if m else None
+
+
+WARRANTY_RE = re.compile(
+    r"(?:limited\s+)?lifetime\s+(?:limited\s+)?warranty|"
+    r"\b(?:\d{1,2}|one|two|three|four|five|six|seven|ten)[-\s]?(?:year|yr|month|mo|day)s?\s+(?:limited\s+|manufacturer'?s?\s+|parts\s+(?:and|&)\s+labou?r\s+)?warranty|"
+    r"warranty\s*[:\-]\s*(?:\d{1,2}|one|two|three|five|ten)\s*(?:year|yr|month|day)s?",
+    re.I,
+)
+
+
+def warranty_text(text: str) -> str | None:
+    m = WARRANTY_RE.search(text or "")
+    return m.group(0).strip() if m else None
+
+
+SHIPPING_RE = re.compile(
+    r"free (?:standard |ground )?(?:shipping|delivery)(?: on (?:orders|purchases) (?:over|of) \$?\d+(?:\.\d\d)?\+?)?|"
+    r"ships? (?:in|within) \d+(?:\s?-\s?\d+)? (?:business )?(?:days?|weeks?)|"
+    r"(?:delivery|delivered) (?:in|within) \d+(?:\s?-\s?\d+)? (?:business )?(?:days?|weeks?)|"
+    r"(?:shipping|delivery)\s*[:]\s*(?:CA)?\$\d+(?:\.\d\d)?",
+    re.I,
+)
+
+
+def shipping_text(text: str) -> str | None:
+    m = SHIPPING_RE.search(text or "")
+    return m.group(0).strip() if m else None
+
+
+def shipping_cost_from_text(text: str | None) -> float | None:
+    """Only returns a number when the text states it unambiguously."""
+    if not text:
+        return None
+    t = text.lower()
+    if t.startswith("free") and "over" not in t and " of " not in t:
+        return 0.0
+    m = re.search(r"(?:shipping|delivery)\s*[:]\s*(?:ca)?\$(\d+(?:\.\d\d)?)", t)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+AVAIL_RE = re.compile(r"\b(in stock|out of stock|sold out|backorder(?:ed)?|special order|discontinued|pre-?order|limited stock)\b", re.I)
+
+
+def availability_text(text: str) -> str | None:
+    m = AVAIL_RE.search(text or "")
+    return m.group(0).lower() if m else None
+
+
+BULK_RE = re.compile(
+    r"\b(bulk pricing|volume pricing|volume discount|quantity discount|tiered pricing|wholesale(?: pricing| price)?|"
+    r"case pricing|contract pricing|buy in bulk|bulk order|bulk discount)\b",
+    re.I,
+)
+
+
+def bulk_signal(text: str) -> str | None:
+    m = BULK_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+ISSUE_RE = re.compile(
+    r"\b(recall(?:ed|s)?|defect(?:ive|s)?|broke|broken|fail(?:ed|s|ure|ures)?|stopped working|overheat(?:s|ed|ing)?|"
+    r"leak(?:s|ed|ing)?|crack(?:s|ed)?|return(?:ed)? it|died|dies|unreliable|poor quality|junk|safety (?:issue|hazard|notice)|"
+    r"fire hazard|burn hazard|injur(?:y|ies))\b",
+    re.I,
+)
+PRAISE_RE = re.compile(
+    r"\b(reliable|durable|well[- ]built|solid|excellent|great value|highly recommend(?:ed)?|works great|"
+    r"best (?:in class|value)|heavy[- ]duty|long[- ]lasting|top pick|recommended)\b",
+    re.I,
+)
+
+
+def sentences_matching(text: str, pattern: re.Pattern[str], limit: int = 3) -> list[str]:
+    """Verbatim sentences from `text` that contain `pattern`."""
+    out = []
+    for sent in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        s = sent.strip()
+        if 20 <= len(s) <= 400 and pattern.search(s):
+            out.append(s)
+            if len(out) >= limit:
+                break
+    return out
+
+
+# ------------------------------------------------------------- structured data
+
+
+def _types(node: dict[str, Any]) -> set[str]:
+    t = node.get("@type")
+    if isinstance(t, str):
+        return {t.split("/")[-1]}
+    if isinstance(t, list):
+        return {str(x).split("/")[-1] for x in t}
+    return set()
+
+
+def _walk(node: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _walk(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk(v)
+
+
+def jsonld_blocks(html: str) -> list[Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    blocks = []
+    for script in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
+        raw = script.string or script.get_text() or ""
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            blocks.append(json.loads(raw))
+        except json.JSONDecodeError:
+            # Some sites emit trailing commas; one conservative repair attempt.
+            try:
+                blocks.append(json.loads(re.sub(r",\s*([}\]])", r"\1", raw)))
+            except json.JSONDecodeError:
+                continue
+    return blocks
+
+
+def _first(v: Any) -> Any:
+    return v[0] if isinstance(v, list) and v else v
+
+
+def _name(v: Any) -> str | None:
+    v = _first(v)
+    if isinstance(v, dict):
+        return v.get("name")
+    return v if isinstance(v, str) else None
+
+
+@dataclass
+class StructuredOffer:
+    price: float | None
+    price_high: float | None
+    currency: str | None
+    availability: str | None
+    condition: str | None
+    seller: str | None
+    url: str | None
+    raw_price: str
+
+
+@dataclass
+class StructuredProduct:
+    name: str | None
+    brand: str | None
+    sku: str | None
+    mpn: str | None
+    gtin: str | None
+    description: str | None
+    offers: list[StructuredOffer]
+    rating_value: float | None
+    rating_count: int | None
+    rating_best: float | None
+    specs: dict[str, str]
+
+
+def _offer_nodes(offers: Any) -> list[dict[str, Any]]:
+    if isinstance(offers, dict):
+        return [offers]
+    if isinstance(offers, list):
+        return [o for o in offers if isinstance(o, dict)]
+    return []
+
+
+def _parse_offer(o: dict[str, Any]) -> StructuredOffer | None:
+    types = _types(o)
+    spec = _first(o.get("priceSpecification")) if isinstance(o.get("priceSpecification"), (dict, list)) else None
+    price_raw = o.get("price")
+    if price_raw in (None, "") and isinstance(spec, dict):
+        price_raw = spec.get("price")
+    currency = o.get("priceCurrency") or (spec.get("priceCurrency") if isinstance(spec, dict) else None)
+    low = high = None
+    if "AggregateOffer" in types or ("lowPrice" in o and price_raw in (None, "")):
+        low = _to_float(str(o.get("lowPrice"))) if o.get("lowPrice") not in (None, "") else None
+        high = _to_float(str(o.get("highPrice"))) if o.get("highPrice") not in (None, "") else None
+        if high is not None and low is not None and high <= low:
+            high = None
+        price = low
+        raw = f"{o.get('lowPrice')}-{o.get('highPrice')}" if high else str(o.get("lowPrice"))
+    else:
+        price = _to_float(str(price_raw)) if price_raw not in (None, "") else None
+        raw = str(price_raw) if price_raw is not None else ""
+    if price is not None and price <= 0:
+        price = None
+    avail = o.get("availability")
+    if isinstance(avail, str):
+        avail = re.sub(r"^https?://schema\.org/", "", avail)
+    return StructuredOffer(
+        price=price,
+        price_high=high,
+        currency=currency.upper() if isinstance(currency, str) and len(currency) == 3 else None,
+        availability=avail if isinstance(avail, str) else None,
+        condition=condition_from_schema(o.get("itemCondition")),
+        seller=_name(o.get("seller")),
+        url=o.get("url") if isinstance(o.get("url"), str) else None,
+        raw_price=raw,
+    )
+
+
+def structured_products(html: str) -> list[StructuredProduct]:
+    """schema.org Product data (JSON-LD) plus Open Graph / microdata price fallbacks."""
+    products: list[StructuredProduct] = []
+    for block in jsonld_blocks(html):
+        for node in _walk(block):
+            if not isinstance(node, dict) or not ({"Product", "ProductModel", "IndividualProduct"} & _types(node)):
+                continue
+            offers = [x for x in (_parse_offer(o) for o in _offer_nodes(node.get("offers"))) if x]
+            rating = node.get("aggregateRating") if isinstance(node.get("aggregateRating"), dict) else {}
+            specs: dict[str, str] = {}
+            for prop in node.get("additionalProperty") or []:
+                if isinstance(prop, dict) and prop.get("name") and prop.get("value") not in (None, ""):
+                    specs[str(prop["name"])[:80]] = str(prop["value"])[:200]
+            for key in ("color", "material", "weight", "width", "height", "depth", "size", "model"):
+                val = node.get(key)
+                if isinstance(val, (str, int, float)):
+                    specs.setdefault(key, str(val)[:200])
+                elif isinstance(val, dict) and val.get("value") is not None:
+                    specs.setdefault(key, f"{val.get('value')} {val.get('unitText') or val.get('unitCode') or ''}".strip())
+            count = rating.get("reviewCount") or rating.get("ratingCount")
+            products.append(StructuredProduct(
+                name=node.get("name") if isinstance(node.get("name"), str) else None,
+                brand=_name(node.get("brand")),
+                sku=str(node.get("sku")) if node.get("sku") else None,
+                mpn=str(node.get("mpn")) if node.get("mpn") else None,
+                gtin=str(node.get("gtin13") or node.get("gtin12") or node.get("gtin") or node.get("gtin14") or "") or None,
+                description=(node.get("description") or "")[:600] if isinstance(node.get("description"), str) else None,
+                offers=offers,
+                rating_value=_to_float(str(rating.get("ratingValue"))) if rating.get("ratingValue") not in (None, "") else None,
+                rating_count=int(_to_float(str(count)) or 0) if count not in (None, "") else None,
+                rating_best=_to_float(str(rating.get("bestRating"))) if rating.get("bestRating") not in (None, "") else None,
+                specs=specs,
+            ))
+    if not any(p.offers for p in products):
+        meta = _meta_price(html)
+        if meta:
+            products.append(meta)
+    return products
+
+
+def _meta_price(html: str) -> StructuredProduct | None:
+    soup = BeautifulSoup(html, "html.parser")
+
+    def meta(*names: str) -> str | None:
+        for n in names:
+            tag = soup.find("meta", attrs={"property": n}) or soup.find("meta", attrs={"name": n}) \
+                or soup.find(attrs={"itemprop": n})
+            if tag is not None:
+                val = tag.get("content") or tag.get_text(strip=True)
+                if val:
+                    return str(val)
+        return None
+
+    amount = meta("product:price:amount", "og:price:amount", "price")
+    if not amount:
+        return None
+    value = _to_float(re.sub(r"[^\d.,]", "", amount))
+    if value is None or value <= 0:
+        return None
+    currency = meta("product:price:currency", "og:price:currency", "priceCurrency")
+    title = meta("og:title") or (soup.title.get_text(strip=True) if soup.title else None)
+    return StructuredProduct(
+        name=title, brand=meta("product:brand", "og:brand"), sku=None, mpn=None, gtin=None, description=None,
+        offers=[StructuredOffer(value, None, currency.upper() if currency and len(currency) == 3 else None,
+                                meta("product:availability", "og:availability"), None, None, None, amount)],
+        rating_value=None, rating_count=None, rating_best=None, specs={},
+    )
+
+
+def page_title(html: str) -> str | None:
+    soup = BeautifulSoup(html, "html.parser")
+    og = soup.find("meta", attrs={"property": "og:title"})
+    if og and og.get("content"):
+        return str(og["content"]).strip()
+    if soup.title:
+        return soup.title.get_text(strip=True)
+    return None
+
+
+def page_text(html: str, limit: int = 20000) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "footer", "header", "form"]):
+        tag.decompose()
+    text = soup.get_text(" ", strip=True)
+    return re.sub(r"\s+", " ", text)[:limit]

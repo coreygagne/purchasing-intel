@@ -1,0 +1,392 @@
+"""Turn raw provider output into numbered sources and price offers.
+
+Each offer records exactly where its price came from (`price_basis`) and
+the verbatim text it was read from (`evidence_quote`), so the UI can label
+it as quoted, snippet-only, calculated or estimated.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+from . import extract as ex
+from .db import iso
+from .fetch import FetchResult
+from .providers.base import SearchHit, ShoppingListing
+from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COUNTRY_CURRENCY, DISTRIBUTOR, GOVERNMENT, MANUFACTURER,
+                        MARKETPLACE, RETAILER, REVIEW_TYPES, UNKNOWN, classify_source, domain_of,
+                        lookup_by_name)
+
+SELLER_PURPOSES = {"price", "suppliers", "wholesale", "cross_border", "input_url"}
+SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN}
+
+PRICE_BASIS_LABELS = {
+    "structured_data": "Quoted: supplier page data (schema.org)",
+    "shopping_api": "Quoted: Google Shopping listing (via SerpApi)",
+    "llm_verified": "Quoted: page text, AI-extracted, exact text verified",
+    "snippet": "Seen in search snippet: may be outdated, verify on page",
+    "none": "No price published",
+}
+CONFIDENCE = {"structured_data": "high", "shopping_api": "medium", "llm_verified": "medium", "snippet": "low", "none": "n/a"}
+
+
+@dataclass
+class Source:
+    id: str
+    url: str
+    domain: str
+    title: str
+    snippet: str
+    type: str
+    name: str
+    country: str | None
+    country_basis: str
+    in_directory: bool
+    purposes: list[str]
+    queries: list[str]
+    provider: str
+    retrieved_at: str
+    published_date: str | None = None
+    raw_content: str | None = None
+    fetch: dict[str, Any] | None = None
+    page_text: str | None = None
+
+    def public(self) -> dict[str, Any]:
+        d = asdict(self)
+        d.pop("raw_content", None)
+        d.pop("page_text", None)
+        return d
+
+
+@dataclass
+class Offer:
+    id: str
+    source_id: str | None
+    url: str
+    supplier: str
+    supplier_domain: str
+    supplier_type: str
+    supplier_in_directory: bool
+    country: str | None
+    country_basis: str
+    product_title: str
+    price: float | None
+    price_high: float | None
+    currency: str | None
+    currency_basis: str
+    price_text: str | None
+    price_type: str  # listed | range | quote_required | unclear | none
+    price_basis: str
+    evidence_quote: str | None
+    observed_at: str
+    provider: str
+    condition: str | None = None
+    match_level: str = "unverified"
+    match_notes: list[str] = field(default_factory=list)
+    pack_qty: int | None = None
+    pack_text: str | None = None
+    availability: str | None = None
+    shipping_text: str | None = None
+    shipping_cost: float | None = None
+    warranty: str | None = None
+    moq: str | None = None
+    bulk: str | None = None
+    rating: dict[str, Any] | None = None
+    specs: dict[str, str] = field(default_factory=dict)
+    identifiers: dict[str, str] = field(default_factory=dict)
+    is_reference: bool = False
+    notes: list[str] = field(default_factory=list)
+    # filled in by analysis
+    price_cad: float | None = None
+    fx_rate: float | None = None
+    fx_date: str | None = None
+    unit_price: float | None = None
+    unit_price_cad: float | None = None
+    delivered: dict[str, Any] | None = None
+    comparable: bool = False
+    exclusion_reasons: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+    confidence: str = "n/a"
+    price_label: str = ""
+
+    def superseded(self) -> bool:
+        return any(n.startswith("Superseded") for n in self.notes)
+
+
+# ------------------------------------------------------------------ sources
+
+
+def build_sources(hits: list[SearchHit], brand_words: list[str]) -> list[Source]:
+    by_url: dict[str, Source] = {}
+    order: list[str] = []
+    for h in hits:
+        key = re.sub(r"[#?].*$", "", h.url.rstrip("/"))
+        if key in by_url:
+            s = by_url[key]
+            if h.purpose not in s.purposes:
+                s.purposes.append(h.purpose)
+            if h.query not in s.queries:
+                s.queries.append(h.query)
+            if len(h.snippet) > len(s.snippet):
+                s.snippet = h.snippet
+            if h.raw_content and not s.raw_content:
+                s.raw_content = h.raw_content
+            continue
+        cls = classify_source(h.url, h.title, brand_words)
+        by_url[key] = Source(
+            id="", url=h.url, domain=domain_of(h.url), title=h.title.strip() or domain_of(h.url),
+            snippet=h.snippet.strip(), type=cls.type, name=cls.name, country=cls.country,
+            country_basis=cls.country_basis, in_directory=cls.in_directory, purposes=[h.purpose],
+            queries=[h.query], provider=h.provider, retrieved_at=iso(), published_date=h.published_date,
+            raw_content=h.raw_content,
+        )
+        order.append(key)
+    sources = [by_url[k] for k in order]
+    for i, s in enumerate(sources, start=1):
+        s.id = f"S{i}"
+    return sources
+
+
+def add_source(sources: list[Source], *, url: str, title: str, snippet: str, purpose: str, provider: str,
+               brand_words: list[str]) -> Source:
+    cls = classify_source(url, title, brand_words)
+    s = Source(id=f"S{len(sources) + 1}", url=url, domain=domain_of(url), title=title or domain_of(url),
+               snippet=snippet, type=cls.type, name=cls.name, country=cls.country, country_basis=cls.country_basis,
+               in_directory=cls.in_directory, purposes=[purpose], queries=[], provider=provider, retrieved_at=iso())
+    sources.append(s)
+    return s
+
+
+def is_seller_source(s: Source) -> bool:
+    return s.type in SELLER_TYPES and bool(SELLER_PURPOSES & set(s.purposes))
+
+
+# ------------------------------------------------------------------- offers
+
+
+DOLLAR_CURRENCIES = {"CAD", "USD", "AUD", "NZD", "HKD", "SGD", "MXN", "TWD"}
+
+
+def _resolve_currency(match: ex.PriceMatch | None, stated: str | None, country: str | None,
+                      region_default: str | None = None) -> tuple[str | None, str]:
+    """Currency of a price. 'stated' when the source says it; otherwise a labelled inference or unknown."""
+    if stated:
+        return stated.upper(), "stated"
+    if match and match.currency:
+        return match.currency, "stated"
+    symbol = match.symbol if match else ""
+    if symbol not in ("", "$"):
+        return None, "unknown"
+    if region_default:
+        return region_default, "inferred from Google Shopping Canada region"
+    cur = COUNTRY_CURRENCY.get(country or "")
+    if cur and (symbol == "" or cur in DOLLAR_CURRENCIES):
+        return cur, "inferred from seller country"
+    return None, "unknown"
+
+
+def _base_offer(oid: str, src: Source | None, *, url: str, supplier: str | None, title: str, provider: str,
+                brand_words: list[str]) -> dict[str, Any]:
+    if src is not None:
+        cls_name, cls_type, country, basis, in_dir = src.name, src.type, src.country, src.country_basis, src.in_directory
+    else:
+        c = classify_source(url, title, brand_words)
+        cls_name, cls_type, country, basis, in_dir = c.name, c.type, c.country, c.country_basis, c.in_directory
+    return dict(id=oid, source_id=src.id if src else None, url=url,
+                supplier=supplier or cls_name, supplier_domain=domain_of(url), supplier_type=cls_type,
+                supplier_in_directory=in_dir, country=country, country_basis=basis, product_title=title.strip()[:300],
+                observed_at=iso(), provider=provider)
+
+
+def _text_fields(text: str) -> dict[str, Any]:
+    pack = ex.pack_quantity(text)
+    ship = ex.shipping_text(text)
+    return dict(pack_qty=pack[0] if pack else None, pack_text=pack[1] if pack else None,
+                availability=ex.availability_text(text), shipping_text=ship,
+                shipping_cost=ex.shipping_cost_from_text(ship), warranty=ex.warranty_text(text),
+                moq=ex.moq_text(text), bulk=ex.bulk_signal(text), condition=ex.detect_condition(text))
+
+
+class OfferBuilder:
+    def __init__(self, brand_words: list[str]):
+        self.brand_words = brand_words
+        self.offers: list[Offer] = []
+
+    def _next_id(self) -> str:
+        return f"O{len(self.offers) + 1}"
+
+    def from_shopping(self, listings: list[ShoppingListing], sources: list[Source]) -> None:
+        for l in listings:
+            src = add_source(sources, url=l.url, title=l.title, snippet=" · ".join(
+                x for x in [l.price_text, l.supplier, l.delivery] if x), purpose="shopping",
+                provider=l.provider, brand_words=self.brand_words)
+            match = ex.parse_price_text(l.price_text or "") if l.price_text else None
+            supplier = l.supplier or src.name
+            if src.domain.endswith(("google.com", "google.ca")):
+                # Google product page link: the seller is the listing's "source"
+                info = lookup_by_name(l.supplier or "")
+                src.name = supplier
+                if info:
+                    src.type, src.country, src.country_basis, src.in_directory = info.type, info.country, "directory", True
+                else:
+                    src.type, src.country, src.country_basis, src.in_directory = UNKNOWN, None, "unknown", False
+            currency, cbasis = _resolve_currency(match, None, src.country, region_default="CAD")
+            base = _base_offer(self._next_id(), src, url=l.url, supplier=supplier, title=l.title,
+                               provider=l.provider, brand_words=self.brand_words)
+            base.update(supplier_type=src.type, country=src.country, country_basis=src.country_basis,
+                        supplier_in_directory=src.in_directory)
+            fields = _text_fields(f"{l.title} {l.delivery or ''}")
+            if l.delivery:
+                fields["shipping_text"] = l.delivery
+                fields["shipping_cost"] = ex.shipping_cost_from_text(l.delivery) if re.match(r"(?i)free", l.delivery) else _delivery_cost(l.delivery)
+            if l.condition:
+                fields["condition"] = ex.detect_condition(l.condition) or l.condition.lower()
+            price = l.price_value if l.price_value is not None else (match.amount if match else None)
+            offer = Offer(**base, **fields, price=price, price_high=match.high if match else None,
+                          currency=currency, currency_basis=cbasis, price_text=l.price_text,
+                          price_type="listed" if price is not None else "none",
+                          price_basis="shopping_api" if price is not None else "none",
+                          evidence_quote=l.price_text)
+            if l.rating is not None:
+                offer.rating = {"value": l.rating, "count": l.reviews, "best": 5.0,
+                                "basis": "Google Shopping product rating (aggregated by Google)"}
+            if not l.extra.get("direct_link"):
+                offer.notes.append("Link opens Google's product page; seller page not linked directly.")
+            self.offers.append(offer)
+
+    def from_structured(self, src: Source, products: list[ex.StructuredProduct], target_tokens: list[str],
+                        fetched_at: str, is_reference: bool = False) -> bool:
+        """Add offers from schema.org data on a fetched page. Returns True if any price was found."""
+        with_offers = [p for p in products if p.offers]
+        if not with_offers:
+            return False
+        # Prefer the product whose identifiers match the request
+        def score(p: ex.StructuredProduct) -> int:
+            text = " ".join(x for x in [p.name, p.sku, p.mpn] if x)
+            return {"exact": 3, "variant": 2, "unverified": 1, "different": 0}[ex.match_offer(target_tokens, text).level]
+        product = sorted(with_offers, key=score, reverse=True)[0]
+        added = False
+        for so in product.offers[:3]:
+            title = product.name or src.title
+            base = _base_offer(self._next_id(), src, url=so.url if so.url and so.url.startswith("http") else src.url,
+                               supplier=None, title=title, provider="page fetch", brand_words=self.brand_words)
+            base["observed_at"] = fetched_at
+            if so.seller and src.type == MARKETPLACE:
+                base["supplier"] = f"{src.name} (seller: {so.seller})"
+            fields = _text_fields(f"{title} {src.snippet}")
+            fields["condition"] = so.condition or fields["condition"]
+            if so.availability:
+                fields["availability"] = re.sub(r"(?<!^)(?=[A-Z])", " ", so.availability).lower()
+            currency, cbasis = _resolve_currency(None, so.currency, src.country)
+            price_type = "range" if so.price_high else ("listed" if so.price is not None else "none")
+            offer = Offer(**base, **fields, price=so.price, price_high=so.price_high, currency=currency,
+                          currency_basis=cbasis, price_text=so.raw_price or None, price_type=price_type,
+                          price_basis="structured_data" if so.price is not None else "none",
+                          evidence_quote=f'schema.org price "{so.raw_price}" {so.currency or ""}'.strip(),
+                          is_reference=is_reference)
+            offer.identifiers = {k: v for k, v in {"sku": product.sku, "mpn": product.mpn, "gtin": product.gtin,
+                                                    "brand": product.brand}.items() if v}
+            offer.specs = dict(product.specs)
+            if product.rating_value is not None:
+                offer.rating = {"value": product.rating_value, "count": product.rating_count,
+                                "best": product.rating_best or 5.0,
+                                "basis": "Customer rating published on the supplier's page"}
+            self.offers.append(offer)
+            added = added or so.price is not None
+        return added
+
+    def from_snippet(self, src: Source) -> None:
+        """Price text visible in the search result itself (lowest confidence)."""
+        text = f"{src.title}. {src.snippet}"
+        quote = ex.quote_required(text)
+        prices = ex.find_prices(src.snippet) or ex.find_prices(src.title)
+        base = _base_offer(self._next_id(), src, url=src.url, supplier=None, title=src.title,
+                           provider=src.provider, brand_words=self.brand_words)
+        fields = _text_fields(text)
+        if not prices:
+            if quote:
+                self.offers.append(Offer(**base, **fields, price=None, price_high=None, currency=None,
+                                         currency_basis="unknown", price_text=quote, price_type="quote_required",
+                                         price_basis="none", evidence_quote=quote))
+            return
+        distinct = {(round(p.amount, 2), p.currency) for p in prices}
+        if len(distinct) > 1:
+            shown = ", ".join(p.raw for p in prices[:4])
+            self.offers.append(Offer(**base, **fields, price=None, price_high=None, currency=None,
+                                     currency_basis="unknown", price_text=shown, price_type="unclear",
+                                     price_basis="snippet", evidence_quote=src.snippet[:300],
+                                     notes=[f"Several prices in the snippet ({shown}); open the page to see which applies."]))
+            return
+        p = prices[0]
+        currency, cbasis = _resolve_currency(p, None, src.country)
+        self.offers.append(Offer(**base, **fields, price=p.amount, price_high=p.high, currency=currency,
+                                 currency_basis=cbasis, price_text=p.raw,
+                                 price_type="range" if p.is_range else "listed", price_basis="snippet",
+                                 evidence_quote=_around(src.snippet or src.title, p.raw)))
+
+    def from_llm(self, src: Source, item: dict[str, Any]) -> None:
+        """Offer extracted by the language model; caller has already verified the quote."""
+        base = _base_offer(self._next_id(), src, url=src.url, supplier=item.get("supplier_name") or None,
+                           title=item.get("product_title") or src.title, provider="Claude (verified)",
+                           brand_words=self.brand_words)
+        p = ex.parse_price_text(item["price_text"])
+        stated = (item.get("currency_stated") or "").strip().upper()
+        quoted = f"{item['price_text']} {item.get('evidence_quote') or ''}".upper()
+        if not re.fullmatch(r"[A-Z]{3}", stated) or stated not in quoted:
+            stated = ""  # only trust a currency the quoted text actually shows
+        currency, cbasis = _resolve_currency(p, stated or None, src.country)
+        fields = _text_fields(f"{item.get('product_title', '')} {item.get('evidence_quote', '')}")
+        for key in ("shipping_text", "warranty", "moq", "availability"):
+            if item.get(key) and ex_text_in(item[key], src):
+                fields[key] = item[key]
+        if fields.get("shipping_text"):
+            fields["shipping_cost"] = ex.shipping_cost_from_text(fields["shipping_text"])
+        if item.get("pack_quantity") and int(item["pack_quantity"]) > 1 and str(item["pack_quantity"]) in (item.get("evidence_quote") or "") + (item.get("product_title") or ""):
+            fields["pack_qty"] = int(item["pack_quantity"])
+        if item.get("condition") in ("new", "used", "refurbished", "open box"):
+            fields["condition"] = item["condition"]
+        self.offers.append(Offer(**base, **fields, price=p.amount if p else None, price_high=p.high if p else None,
+                                 currency=currency, currency_basis=cbasis, price_text=item["price_text"],
+                                 price_type="range" if p and p.is_range else "listed", price_basis="llm_verified",
+                                 evidence_quote=item.get("evidence_quote")))
+
+
+def ex_text_in(text: str, src: Source) -> bool:
+    hay = _squash(" ".join(x for x in [src.title, src.snippet, src.raw_content or "", src.page_text or ""] if x))
+    return _squash(text) in hay
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def _delivery_cost(text: str) -> float | None:
+    m = re.search(r"\$\s?(\d+(?:\.\d\d)?)\s*(?:delivery|shipping)", text, re.I)
+    return float(m.group(1)) if m else None
+
+
+def _around(text: str, needle: str, width: int = 120) -> str:
+    i = text.find(needle)
+    if i < 0:
+        return text[: width * 2]
+    start, end = max(0, i - width), min(len(text), i + len(needle) + width)
+    return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+
+
+def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source]) -> None:
+    for o in offers:
+        text = " ".join([o.product_title] + list(o.identifiers.values()))
+        if o.price_basis == "snippet" and o.source_id in sources_by_id:
+            text += " " + (o.evidence_quote or "")
+        m = ex.match_offer(tokens, text)
+        o.match_level, o.match_notes = m.level, m.notes
+        o.price_label = PRICE_BASIS_LABELS.get(o.price_basis, o.price_basis)
+        if o.price_type == "quote_required":
+            o.price_label = "Quote required"
+        o.confidence = CONFIDENCE.get(o.price_basis, "n/a")
+
+
+def is_review_type(t: str) -> bool:
+    return t in REVIEW_TYPES or t == GOVERNMENT
