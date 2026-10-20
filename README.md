@@ -11,7 +11,7 @@ when, and each number carries a mark:
 
 | Mark | Meaning |
 |---|---|
-| **Quoted** | Stated by the source: schema.org price data on the supplier's page, a Google Shopping listing, or (with AI on) page text whose exact wording was verified. |
+| **Quoted** | Stated by the source: schema.org price data on the supplier's page, a Google Shopping listing, or (with AI on) seller-page text whose exact wording, including the model number next to the price, was verified. |
 | **Snippet** | Seen only in a search-result snippet. Possibly outdated; open the page to confirm. Snippet prices never win "lowest" when a better-evidenced price exists. |
 | **Calculated** | Arithmetic on quoted values: unit price, currency conversion (Bank of Canada rate), order totals. |
 | **Estimated** | Uses *your* stated assumptions (import shipping, duty %, surtax %, brokerage). Nothing is assumed for you. |
@@ -74,6 +74,15 @@ Supplier pages are also read directly (no credits) for schema.org price data. Th
 is limited to `FETCH_MAX_PAGES` (10) per research. Many large retailers block automated reads; when that
 happens the source shows "page read: no (blocked)" and the price relies on search data.
 
+**Safety:** pasted links and search results are fetched only if they meet all of these, checked on every
+redirect hop:
+- http(s) only, on ports 80/443, with no embedded credentials;
+- the host resolves (via the server's DNS) to public internet addresses only, so localhost, the office LAN and
+  cloud-metadata addresses are refused.
+
+If the server can't resolve a host name, that page isn't read. Each page read and each whole research job
+also has a time limit (`FETCH_TIMEOUT_S`, `JOB_TIMEOUT_S`).
+
 ---
 
 ## What a research does
@@ -86,8 +95,18 @@ happens the source shows "page read: no (blocked)" and the price relies on searc
 4. **Build offers**, each labeled by evidence: page data > shopping listing > AI-verified page text > snippet.
    Quote-only suppliers are recorded as such.
 5. **Check equivalence.** Exact model, different variant/kit (e.g. `2767-22` vs `2767-20`),
-   compatible/aftermarket, or different model. Refurbished/used/open-box, price ranges, unclear prices and
-   unconvertible currencies are flagged and **excluded from the comparison**, but stay visible with the reason.
+   compatible/aftermarket/accessory ("replacement for 2767-20", "battery for 2767-20"), or different model.
+   The following are flagged and **excluded from the comparison**, but stay visible with the reason:
+   - refurbished/used/open-box items (condition is read from the title or page data only);
+   - price ranges and "from" prices;
+   - pages listing several prices for one product (variants or sellers);
+   - unconvertible currencies;
+   - out-of-stock or discontinued items;
+   - minimum orders above your quantity.
+
+   Pack sizes are read from product titles only ("Socket set (28 pcs)" is one set, not 28 items). Prices are
+   compared per unit only when at least two comparable listings state a pack size; listings that don't
+   state one then count as single units, with a flag. Otherwise listing prices are compared.
 6. **Convert currencies** with the Bank of Canada daily rate (date shown). If the rate is unavailable, foreign
    prices are excluded, not guessed.
 7. **Recommend.**
@@ -123,8 +142,17 @@ Recommendations are always based on observed prices, never on speculative import
 - **Ratings** from page data or Google Shopping are listed with their source and never averaged.
 - **Reported problems, praise and recall mentions** are shown as *verbatim sentences* with links, labeled by
   source type: professional review, user discussion (anecdotal), video, complaints site, government.
-- **With AI on**, recurring praise, criticism and reliability issues are summarized. Each point must carry at
-  least one exact quote from a cited source or it is dropped. The tab shows how many were dropped.
+- **With AI on**, recurring praise, criticism and reliability issues are summarized. A point is dropped if:
+  - none of its quotes is substantial (20+ characters) and found word-for-word in a cited source; or
+  - it contains a number or percentage that doesn't appear in its quotes.
+
+  The free-text note on evidence strength is labeled as AI commentary and dropped if it contains any figures.
+  The tab shows how many points were dropped.
+- **AI-read prices** are accepted only from seller pages, and only when the requested model number is named
+  shortly before the price in the verbatim page text. They are rejected if another price, another model
+  number or "related products" wording sits in between, so accessory and sibling-kit prices don't pass. The
+  title, seller, pack size and condition come from the page itself, never from the AI. If the AI is slow, it
+  is skipped and the search results are kept.
 
 ---
 
@@ -148,7 +176,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 62 tests
+python -m pytest -q            # 97 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
@@ -161,7 +189,10 @@ The tests never call real providers. They run the real HTTP, parsing and analysi
 - conflicting prices, refurbished/variant/compatible exclusion, quote-only suppliers;
 - URL input (readable and unreadable), robots.txt, the duplicate guard, assumptions recalculation and
   history charting rules;
-- AI verification (fabricated prices, quotes and statistics are rejected);
+- AI verification: fabricated prices, accessory prices, invented pack sizes, conditions and statistics, and
+  review-page "offers" are all rejected;
+- the code-review regression suite (`tests/test_review_fixes.py`): aftermarket pages, multi-price pages,
+  decimal commas, SSRF attempts, spreadsheet formula injection, and more;
 - browser tests of the UI (`tests/test_ui.py`, skipped if Playwright/Chromium is missing).
 
 To click through the UI with simulated data (a red banner marks it as a test harness):
@@ -225,7 +256,10 @@ scripts/smoke_test.py   live check with real keys
 
 ## Status and limits (honest)
 
-**Built and tested against the simulated web:** everything described above.
+**Built and tested against the simulated web:** everything described above. An independent code review
+(two rounds) found accuracy and safety issues. They were fixed and covered by regression tests
+(`tests/test_review_fixes.py`), and mutation checks confirm the key tests fail if a fix is reverted. One
+residual risk is accepted for Phase 1 and listed under limitations (DNS rebinding).
 
 **Not verified against the live providers from the development environment.** The build environment's
 network policy blocked api.tavily.com, serpapi.com and bankofcanada.ca. The provider code follows each
@@ -244,8 +278,14 @@ the error appears as "unexpected response format" rather than as wrong data.
   equivalence is explicitly "not verified".
 - **Supplier labels.** The supplier directory (`app/suppliers.py`) labels site *types* (distributor,
   retailer, marketplace…). It makes no quality claims; unknown sites are flagged for verification.
-- **Shipping.** Stated only when a listing states it; otherwise it's shown as unknown.
+- **Shipping.** Used only when a listing states it. A foreign seller's "free shipping" is not assumed to apply
+  to Canada; Google Shopping Canada delivery terms are. Otherwise shipping is unknown, or your assumption.
 - **No login or user accounts.** Saved comparisons are shared by everyone using the server.
+- **Page-fetch safety.** Host names are checked against private/internal addresses before each request, but
+  the connection resolves the name again, so a deliberately "rebinding" DNS server could still slip through.
+  Keep the server on a trusted network.
+- **Pure-number model numbers** (e.g. `8210`) can match unrelated numbers in a listing, such as an item
+  number. Use the brand plus model ("3M 8210") for best results.
 
 **Out of scope for Phase 1:** accounting, automatic emails or purchasing, payments, ERP integration.
 

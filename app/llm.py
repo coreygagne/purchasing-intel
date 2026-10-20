@@ -156,15 +156,57 @@ def numbers_in(text: str) -> set[str]:
     return set(re.findall(r"\d+(?:[.,]\d+)?", text or ""))
 
 
-def context_before(quote: str, s: Source, chars: int = 120) -> str | None:
-    """The verbatim source text: up to `chars` characters before the quote, plus the quote itself."""
+RELATED_RE = re.compile(
+    r"(you may also like|frequently bought|customers (?:also|who)|also bought|also viewed|related (?:products|items)|"
+    r"similar (?:products|items)|recommended (?:for you|products|items)|people also|accessories|compare (?:with|to)|"
+    r"add-ons?|sponsored|bundle and save|complete the set|goes well with)",
+    re.I,
+)
+MAX_MODEL_TO_PRICE = 150
+
+
+def price_context(quote: str, price_text: str, s: Source, tokens: list[str]) -> tuple[str | None, str | None]:
+    """Verbatim source text tying a quoted price to the requested item.
+
+    Returns (context, None) or (None, reason). With model numbers in the request, the model must be
+    named shortly before the price, with no other price, other model number or "related products"
+    wording in between - so accessory or sibling-kit prices on the same page are rejected.
+    """
     norm = re.sub(r"\s+", " ", _squash_keep_case(source_text(s))).strip()
+    low = norm.lower()
     q = _squash(quote).strip(" .…\"'")
-    i = norm.lower().find(q)
-    if i < 0 or not q:
-        return None
-    start = max(0, i - chars)
-    return ("…" if start else "") + norm[start:i + len(q)]
+    qi = low.find(q) if q else -1
+    if qi < 0:
+        return None, "quote not found in source text"
+    pt = _squash(price_text)
+    pi = low.find(pt, qi)
+    if pi < 0 or pi + len(pt) > qi + len(q):
+        return None, "price not inside its quote"
+    end = max(qi + len(q), pi + len(pt))
+    if not tokens:
+        start = max(0, qi - 120)
+        return ("…" if start else "") + norm[start:end], None
+    last = None
+    for tok in tokens:
+        for m in ex._token_regex(tok).finditer(low, max(0, pi - 600), pi):
+            if last is None or m.end() > last[1]:
+                last = (m.start(), m.end())
+    if last is None:
+        return None, "requested model not named next to the price (may be another item on the page)"
+    span = norm[last[1]:pi]
+    wanted = {re.sub(r"[^a-z0-9]", "", t.lower()) for t in tokens}
+    others = [t for t in ex.model_tokens(span)
+              if re.sub(r"[^a-z0-9]", "", t.lower()) not in wanted and not (t.isdigit() and len(t) >= 7)]
+    if len(span) > MAX_MODEL_TO_PRICE:
+        return None, "requested model named too far from the price"
+    if ex.find_prices(span):
+        return None, "another price sits between the model name and this price"
+    if others:
+        return None, f"another model ({others[0]}) is named between the requested model and this price"
+    if RELATED_RE.search(span):
+        return None, "price is in a related-products section"
+    start = max(0, last[0] - 60)  # keep a few words before the model so "battery for <model>" is detectable
+    return ("…" if start else "") + norm[start:end], None
 
 
 def _squash_keep_case(text: str) -> str:
@@ -305,11 +347,9 @@ class ClaudeAnalyst:
                 reason = "quote not found in source text"
             elif ex.parse_price_text(price_text) is None:
                 reason = "price text unreadable"
-            context = context_before(quote, src) if reason is None else None
-            if reason is None and context is None:
-                reason = "quote not found in source text"
-            if reason is None and tokens and ex.match_offer(tokens, context).level == "different":
-                reason = "requested model not named next to the price (may be another item on the page)"
+            context = None
+            if reason is None:
+                context, reason = price_context(quote, price_text, src, tokens or [])
             if reason:
                 rejected += 1
                 rejections.append(reason)

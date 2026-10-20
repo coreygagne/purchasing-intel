@@ -76,6 +76,7 @@ function mark(kind, text) {
 }
 function priceMark(o) {
   if (o.price_type === "quote_required") return mark("quote");
+  if (o.price_type === "unclear") return mark("unknown", "Unclear");
   if (o.price_basis === "snippet") return mark("snippet");
   if (["structured_data", "shopping_api", "llm_verified"].includes(o.price_basis)) {
     return mark("quoted", o.price_basis === "llm_verified" ? "Quoted, AI-read" : "Quoted");
@@ -506,7 +507,7 @@ function qualityTab(res) {
     summ ? h("section", { class: "panel" },
       h("h3", {}, "AI summary of review sources"),
       h("p", { class: "small muted", style: "margin-top:0" }, summ.label,
-        summ.verification ? ` ${summ.verification.points_kept} point(s) kept, ${summ.verification.points_rejected} dropped because their quotes couldn't be found in the sources.` : ""),
+        summ.verification ? ` ${summ.verification.points_kept} point(s) kept, ${summ.verification.points_rejected} dropped by the checks (quotes not found word-for-word, too short, or figures not in the quotes).` : ""),
       summ.overall_note ? h("p", {}, h("span", { class: "muted" }, `${summ.overall_note_label || "AI comment"}: `), summ.overall_note) : null,
       [["praise", "Recurring praise"], ["criticism", "Recurring criticism"], ["reliability_issues", "Reliability issues"]].map(([k, label]) =>
         h("div", {}, h("h4", {}, label), (summ[k] || []).length ? (summ[k] || []).map((p) => h("div", { class: "point" },

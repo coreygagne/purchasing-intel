@@ -68,6 +68,14 @@ QUERY_TEMPLATES = {
 }
 
 FATAL_KINDS = {"auth", "quota", "not_configured"}
+AI_PLAN_TIMEOUT_S = 60
+AI_EXTRACT_TIMEOUT_S = 150
+
+
+def _ai_error(exc: Exception) -> str:
+    if isinstance(exc, asyncio.TimeoutError):
+        return "the AI step took too long and was skipped; results below are from search and page data only"
+    return str(exc) or type(exc).__name__
 
 
 class ResearchError(Exception):
@@ -180,7 +188,8 @@ class ResearchEngine:
             identity, ref_fetch = await self._identify(query, fetcher, providers)
             if self.llm is not None:
                 try:
-                    plan_info = await self.llm.plan(identity.name, identity.input_type)
+                    plan_info = await asyncio.wait_for(self.llm.plan(identity.name, identity.input_type),
+                                                       timeout=AI_PLAN_TIMEOUT_S)
                     identity.category = plan_info.get("category")
                     identity.key_specs = plan_info.get("key_specs", [])[:8]
                     brand = plan_info.get("brand")
@@ -189,7 +198,7 @@ class ResearchEngine:
                     extra_queries = plan_info.get("search_queries", [])
                     llm_usage["plan"] = plan_info.get("_usage")
                 except Exception as exc:  # noqa: BLE001 - AI is optional; report and continue
-                    identity.notes.append(f"AI request planning unavailable: {exc}")
+                    identity.notes.append(f"AI request planning unavailable: {_ai_error(exc)}")
                     extra_queries = []
             else:
                 extra_queries = []
@@ -230,11 +239,12 @@ class ResearchEngine:
             if self.llm is not None:
                 progress("AI is reading page text (every extracted fact is checked against the source)", 70)
                 try:
-                    llm_out = await self.llm.extract(identity, sources, builder)
+                    llm_out = await asyncio.wait_for(self.llm.extract(identity, sources, builder),
+                                                     timeout=AI_EXTRACT_TIMEOUT_S)
                     llm_usage["extract"] = llm_out.get("_usage")
                     llm_summary = llm_out
-                except Exception as exc:  # noqa: BLE001
-                    identity.notes.append(f"AI evidence reading unavailable: {exc}")
+                except Exception as exc:  # noqa: BLE001 - search results are kept without AI
+                    identity.notes.append(f"AI evidence reading unavailable: {_ai_error(exc)}")
                     llm_summary = None
             else:
                 llm_summary = None
@@ -422,6 +432,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     an.apply_costs(offers, fx, clean, quantity)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity)
+    an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
     rec = an.recommend(offers, tokens)
     quality = an.quality_evidence(sources, offers, tokens)

@@ -112,6 +112,7 @@ class Offer:
     flags: list[str] = field(default_factory=list)
     confidence: str = "n/a"
     price_label: str = ""
+    compare_value: float | None = None  # CAD value used for ranking (listing or per-unit price)
 
     def superseded(self) -> bool:
         return any(n.startswith("Superseded") for n in self.notes)
@@ -379,10 +380,7 @@ class OfferBuilder:
         if not re.fullmatch(r"[A-Z]{3}", stated) or stated not in context.upper():
             stated = ""  # only trust a currency the quoted text actually shows
         currency, cbasis = _resolve_currency(p, stated or None, src.country)
-        fields = _text_fields(src.title, context)
-        pack = ex.pack_quantity(context)
-        if pack and not fields["pack_qty"]:
-            fields["pack_qty"], fields["pack_text"] = pack
+        fields = _text_fields(src.title, context)  # pack size from the page title only
         fields["condition"] = fields["condition"] or ex.detect_condition(context)
         if item.get("condition") in ("used", "refurbished", "open box") and not fields["condition"]:
             fields["condition"] = item["condition"]  # only ever more cautious than the text

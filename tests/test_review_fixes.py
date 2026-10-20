@@ -84,8 +84,8 @@ async def test_ai_offers_take_identity_pack_condition_and_seller_from_the_source
     builder = OfferBuilder(["Acme"])
     out = await _analyst(payload).extract(ident, sources, builder)
     reasons = out["verification"]["offer_rejection_reasons"]
-    assert any("not named next to the price" in r for r in reasons)          # accessory rejected
-    assert any("not a seller page" in r for r in reasons)                    # review page rejected
+    assert out["verification"]["offers_rejected"] == 2                       # accessory + review page
+    assert any("not a seller page" in r for r in reasons)
     by_src = {o.source_id: o for o in builder.offers}
     assert set(by_src) == {"S2", "S3"}
     assert by_src["S2"].pack_qty is None and by_src["S2"].supplier == "Shop S2"
@@ -108,7 +108,7 @@ def test_stock_text_is_not_a_pack_size_and_mixed_packs_keep_all_offers(tmp_path)
 
 
 def test_mixed_pack_sizes_do_not_drop_single_listings():
-    from app.analysis import recommend
+    from app.analysis import recommend, set_compare_values
     from app.evidence import Offer
 
     def mk(oid, price, pack=None):
@@ -121,10 +121,17 @@ def test_mixed_pack_sizes_do_not_drop_single_listings():
         o.unit_price_cad = price / pack if pack else None
         o.comparable = True
         return o
+    # one listing states a pack size: compare listing prices; nothing is dropped
     offers = [mk("1", 100.0), mk("2", 110.0), mk("3", 379.0, pack=3)]
+    set_compare_values(offers)
     rec = recommend(offers, ["X-1000"])
-    assert rec["lowest"]["offer_id"] == "1"          # single listings stay in the ranking
-    assert rec["pool_size"] == 3 and "counted as single units" in rec["basis"]
+    assert rec["lowest"]["offer_id"] == "1" and rec["pool_size"] == 3 and rec["basis"] == "listing price (CAD)"
+    # two listings state pack sizes: per-unit, singles counted as one unit and flagged
+    offers = [mk("1", 100.0), mk("2", 250.0, pack=3), mk("3", 379.0, pack=5)]
+    set_compare_values(offers)
+    rec = recommend(offers, ["X-1000"])
+    assert rec["lowest"]["offer_id"] == "3" and "counted as single units" in rec["basis"]
+    assert any("counted as a single unit" in f for f in offers[0].flags)
 
 
 # --- C4: several offers under one Product -> unclear, not ranked ------------------------------------
@@ -311,3 +318,77 @@ def test_history_returns_newest_when_limited():
 def test_title_cleaning_keeps_model_numbers():
     assert _clean_title("Acme | TX-4400 widget") == "Acme TX-4400 widget"
     assert _clean_title("Acme TX-4400 Torque Widget | Grainger Canada") == "Acme TX-4400 Torque Widget"
+
+
+# --- Re-review: dense page text next to the model name -----------------------------------------------
+@pytest.mark.parametrize("page,price,quote,accepted", [
+    # the reviewer's original reproduction: accessory after the product price
+    ("Milwaukee 2767-20 M18 FUEL 1/2 in. impact wrench. Our price $379.00. Frequently bought together: "
+     "M18 REDLITHIUM 5.0Ah Battery $199.00", "$199.00", "M18 REDLITHIUM 5.0Ah Battery $199.00", False),
+    # another price between the model and the quoted price (no other warning words)
+    ("Milwaukee 2767-20 our price $379.00 | M18 Battery $199.00", "$199.00", "M18 Battery $199.00", False),
+    # sibling kit named between the model and the price
+    ("Milwaukee 2767-20 bare tool. Also available: 2767-22 kit with batteries $599.00", "$599.00",
+     "2767-22 kit with batteries $599.00", False),
+    # related-products wording without another price in between
+    ("Milwaukee 2767-20 impact wrench. You may also like: M18 Battery $199.00", "$199.00",
+     "M18 Battery $199.00", False),
+    # the genuine price right after the model name
+    ("Milwaukee 2767-20 M18 FUEL impact wrench, our price $349.00 each", "$349.00", "our price $349.00 each", True),
+    # accessory "for" the model
+    ("Spare battery for Milwaukee 2767-20 $199.00", "$199.00", "Spare battery for Milwaukee 2767-20 $199.00", True),
+])
+async def test_ai_price_must_belong_to_the_requested_model(page, price, quote, accepted):
+    ident = SimpleNamespace(name="Milwaukee 2767-20", model_tokens=["2767-20"], key_specs=[])
+    src = _src("S1", page, title="Milwaukee 2767-20 M18 FUEL Impact Wrench (2-Pack of bits)")
+    payload = {"offers": [_offer("S1", price, quote)], "alternatives": [],
+               "quality": {"praise": [], "criticism": [], "reliability_issues": [], "overall_note": ""}}
+    builder = OfferBuilder(["Milwaukee"])
+    await _analyst(payload).extract(ident, [src], builder)
+    assert bool(builder.offers) == accepted
+    if accepted:
+        from app.evidence import apply_match
+        apply_match(builder.offers, ["2767-20"], {"S1": src})
+        o = builder.offers[0]
+        assert o.pack_qty is None or o.pack_text in src.title          # pack never from nearby text
+        if "Spare battery" in page:
+            assert o.match_level == "compatible"                         # accessory for the model, not the model
+        else:
+            assert o.match_level == "exact"
+
+
+def test_bare_for_does_not_mark_genuine_listings_aftermarket():
+    for t in ("Best price for 2767-20 in Canada", "Shop now for Milwaukee 2767-20",
+              "Looking for a Milwaukee 2767-20? $349.00"):
+        assert ex.match_offer(["2767-20"], t).level == "exact", t
+    assert ex.match_offer(["2767-20"], "M18 batteries for Milwaukee 2767-20").level == "compatible"
+
+
+def test_set_piece_counts_are_not_pack_sizes():
+    assert ex.pack_quantity("Socket set (28 pcs)") is None
+    assert ex.pack_quantity("Nitrile gloves 100 count")[0] == 100
+    assert ex.model_tokens("3M 8210 pack of 20") == ["8210"]
+    assert ex.model_tokens("Makita 9557 in stock") == ["9557"]
+
+
+def test_slow_ai_is_skipped_not_fatal(tmp_path, monkeypatch):
+    import asyncio as aio
+
+    from app import research as rs
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    class SlowAI:
+        async def plan(self, *a):
+            await aio.sleep(5)
+
+        async def extract(self, *a):
+            await aio.sleep(5)
+
+    monkeypatch.setattr(rs, "AI_PLAN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(rs, "AI_EXTRACT_TIMEOUT_S", 0.05)
+    settings = Settings(tavily_api_key="tvly-test-key", anthropic_api_key="k", database_path=tmp_path / "s.db")
+    with TestClient(create_app(settings, transport=FakeWeb().transport(), llm=SlowAI())) as c:
+        res = result_of(c, research(c))
+        assert res["recommendations"]["lowest"] is not None
+        assert sum("took too long and was skipped" in g for g in res["gaps"]) == 2

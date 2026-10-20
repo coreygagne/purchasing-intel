@@ -100,6 +100,8 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
         if o.country != "CA":
             o.flags.append("Possible import: duties, surtaxes, brokerage and longer delivery may apply."
                            if o.country else "Seller country unknown.")
+        if o.moq and not quantity:
+            o.flags.append(f"Minimum order: {o.moq}. Enter your quantity to check it.")
         if o.supplier_type in (MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS):
             o.flags.append("Marketplace: the actual seller may be a third party - check seller ratings and return policy.")
         if o.supplier_type == UNKNOWN and not o.supplier_in_directory:
@@ -180,19 +182,35 @@ def outlier_flags(offers: list[Offer]) -> list[dict[str, Any]]:
 
 
 def _cmp_value(o: Offer) -> float | None:
-    return o.unit_price_cad if o.pack_qty else o.price_cad
+    return o.compare_value
 
 
-def _comparison_basis(pool: list[Offer]) -> tuple[str, list[Offer], list[Offer]]:
-    """Listing price when pack sizes agree; otherwise price per unit, counting listings that state no
-    pack size as single units (flagged). Nothing is dropped from the ranking."""
+def _comparison_basis(pool: list[Offer]) -> tuple[str, bool, list[Offer]]:
+    """(basis label, per-unit?, listings counted as single units). Pure - no side effects.
+
+    Listing price when pack sizes agree. Per-unit price only when at least two listings state a
+    pack size; then listings without one are counted as single units (and flagged)."""
     qtys = {o.pack_qty for o in pool}
-    if len(qtys) <= 1:
-        return "listing price (CAD)", pool, []
-    unknown = [o for o in pool if not o.pack_qty]
+    stated = [o for o in pool if o.pack_qty]
+    if len(qtys) <= 1 or len(stated) < 2:
+        return "listing price (CAD)", False, []
+    return ("price per unit (CAD; listings without a stated pack size counted as single units)", True,
+            [o for o in pool if not o.pack_qty])
+
+
+def set_compare_values(offers: list[Offer]) -> None:
+    """Decide the comparison basis once per analysis and record each offer's comparable value."""
+    pool = [o for o in offers if o.comparable]
+    _, per_unit, unknown = _comparison_basis(pool)
+    for o in offers:
+        o.compare_value = o.unit_price_cad if (per_unit and o.pack_qty) else o.price_cad
     for o in unknown:
         o.flags.append("Pack size not stated in the title - counted as a single unit in the per-unit comparison.")
-    return "price per unit (CAD; listings without a stated pack size counted as single units)", pool, unknown
+    if not per_unit and len({o.pack_qty for o in pool}) > 1:
+        for o in pool:
+            if o.pack_qty:
+                o.flags.append(f"States a pack size ({o.pack_text}); compared by listing price because other "
+                               "listings don't state one.")
 
 
 def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
@@ -211,7 +229,8 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
                            "; ".join(f"{n} x {r}" for r, n in sorted(counts.items(), key=lambda kv: -kv[1])[:5]) + ".")
         return {"lowest": None, "best_value": None, "basis": None, "notes": reasons, "pool_size": 0}
 
-    basis, ranked_pool, unknown_pack = _comparison_basis(pool)
+    basis, _, unknown_pack = _comparison_basis(pool)
+    ranked_pool = pool
     if unknown_pack:
         notes.append(f"Pack sizes differ: {len(unknown_pack)} listing(s) don't state one and were counted as single "
                      "units. Check pack contents before relying on the per-unit ranking.")
@@ -255,8 +274,11 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
     # ---- best overall value: transparent points, not "cheapest wins".
     # Offers whose price was only seen in a snippet are considered only when
     # nothing better is available.
-    value_pool = strong or ranked_pool
-    lo = min(v for v in (_cmp_value(o) for o in value_pool) if v is not None)
+    value_pool = [o for o in (strong or ranked_pool) if _cmp_value(o) is not None]
+    if not value_pool:
+        return {"lowest": None, "best_value": None, "basis": basis, "pool_size": len(pool),
+                "notes": notes + ["No comparable listing has a CAD value to rank."]}
+    lo = min(_cmp_value(o) for o in value_pool)
     scored = []
     for o in value_pool:
         v = _cmp_value(o)

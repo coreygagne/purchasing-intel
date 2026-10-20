@@ -26,10 +26,12 @@ _UNIT_SUFFIX = (
     r"mpa|kpa|t|ton|tons|qt|pt|sqft|cu|cuft|lm|db|ohm|mph)"
 )
 _UNIT_TOKEN_RE = re.compile(rf"^\d+(?:[.,]\d+)?{_UNIT_SUFFIX}$", re.I)
+# Unit words that make a bare number a spec value ("1500 watt", "1000 ft-lb"). Deliberately no single
+# letters, "in", "pack" or "series": "3M 6200 L", "Makita 9557 in stock", "8210 pack of 20" are models.
 _SPEC_AFTER_RE = re.compile(
-    r"\s*-?\s*(?:watts?|w|volts?|v|amps?|a|ft[- .]?lbs?|ft|feet|foot|inch(?:es)?|in\b|\"|mm|cm|lbs?|pounds?|kg|"
-    r"gauge|ga|awg|gallons?|gal|psi|btu|rpm|cfm|gpm|hp|mah|ah|ml|litres?|liters?|l\b|oz|count|ct|pack|pk|pcs?|"
-    r"pieces?|sq|cu|lumens?|lm|degrees?|°|series|grit|mil|tpi|lb)\b",
+    r"\s*-?\s*(?:watts?|volts?|amps?|ft[- .]?lbs?|in[- .]?lbs?|feet|foot|inch(?:es)?|\"|mm|cm|lbs?|pounds?|kg|"
+    r"gauge|awg|gallons?|gal|psi|btu|rpm|cfm|gpm|hp|mah|ml|litres?|liters?|oz|count|ct|pcs|pieces|sq\.? ?ft|"
+    r"lumens?|degrees?|°|grit|tpi|kw|kva|hz)\b",
     re.I,
 )
 _DIM_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?[a-z]*$", re.I)
@@ -103,9 +105,13 @@ class MatchResult:
 
 COMPAT_RE = re.compile(r"\b(aftermarket|knock[- ]?off|replica|non[- ]oem|generic replacement)\b", re.I)
 # A phrase that points at the requested model: "replacement for (Milwaukee) 2767-20", "fits DCF887B"
+_PART_NOUNS = (r"batter(?:y|ies)|anvils?|chargers?|cases?|covers?|bits?|blades?|filters?|cartridges?|parts?|"
+               r"accessor(?:y|ies)|adapters?|holsters?|clips?|belts?|straps?|pads?|brush(?:es)?|seals?|gaskets?|"
+               r"o-rings?|kits?|motors?|switch(?:es)?|housings?|guards?|handles?|hoses?|nozzles?|tips?|refills?|"
+               r"inserts?|cords?|cables?|lens(?:es)?|bulbs?|sleeves?|boots?|springs?|gears?|rotors?|brushes")
 COMPAT_BEFORE_RE = re.compile(
-    r"\b(compatible with|replacement for|replaces|replace|fits|for use with|for|equivalent to|alternative to|"
-    r"substitute for|works with)\s+(?:[a-z0-9&'.\-]+\s+){0,2}$",
+    r"\b(compatible with|replacement for|replaces|fits|for use with|equivalent to|alternative to|substitute for|"
+    r"works with|(?:" + _PART_NOUNS + r")\s+for)\s+(?:[a-z0-9&'.\-]+\s+){0,2}$",
     re.I,
 )
 
@@ -363,13 +369,19 @@ PACK_PATTERNS = [
 ]
 
 
+_SET_RE = re.compile(r"\b(set|kit|assortment|assorted|organizer|collection|combo)\b", re.I)
+
+
 def pack_quantity(text: str) -> tuple[int, str] | None:
     """Units per listing if the listing states a pack/box/case size."""
+    is_set = bool(_SET_RE.search(text or ""))
     for pat in PACK_PATTERNS:
         for m in pat.finditer(text or ""):
             before = (text or "")[max(0, m.start() - 30): m.start()].lower()
             if re.search(r"order|moq|min\.?|minimum|at least|up to|max", before):
                 continue  # an order quantity, not a pack size
+            if is_set and re.search(r"pcs|pieces|count|ct\b", m.group(0), re.I):
+                continue  # "Socket set (28 pcs)": pieces in one item, not 28 items
             qty = int(m.group(1))
             if 1 < qty <= 100000:
                 return qty, m.group(0)
