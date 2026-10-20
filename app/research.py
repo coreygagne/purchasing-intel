@@ -156,11 +156,12 @@ def plan_queries(name: str, depth: str, extra: list[str] | None = None) -> list[
 
 class ResearchEngine:
     def __init__(self, settings: Settings, db: Database, llm: Any | None = None,
-                 transport: httpx.AsyncBaseTransport | None = None):
+                 transport: httpx.AsyncBaseTransport | None = None, anthropic_client: Any | None = None):
         self.settings = settings
         self.db = db
         self.llm = llm
         self.transport = transport  # tests inject a mock transport here
+        self.anthropic_client = anthropic_client  # and a stub Anthropic client for Anthropic web search
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=self.transport, timeout=self.settings.search_timeout_s,
@@ -175,7 +176,7 @@ class ResearchEngine:
         depth = req.depth if req.depth in DEPTHS else "standard"
         cfg = DEPTHS[depth]
         async with self._client() as client:
-            providers = build_providers(self.settings, client)
+            providers = build_providers(self.settings, client, self.anthropic_client)
             if providers.web is None:
                 raise ResearchError("No search provider is configured.", kind="not_configured")
             fetcher = PageFetcher(client, user_agent=self.settings.fetch_user_agent,

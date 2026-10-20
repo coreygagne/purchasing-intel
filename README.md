@@ -43,7 +43,9 @@ Open http://127.0.0.1:8000. The badge at top right turns green ("Ready: Tavily�
 
 ## Search providers, keys and costs
 
-At least one search provider is required. Prices below are from public pricing pages and third-party
+At least one search provider is required: Tavily, SerpApi, or an Anthropic key (Anthropic web search).
+With several keys set, the order is Tavily, then SerpApi, then Anthropic, unless `PI_SEARCH_PROVIDER` says
+otherwise. Prices below are from public pricing pages and third-party
 summaries checked on 2026-10-20. **Verify on each vendor's site before committing; they change.**
 
 | Service | Needed? | What it adds | Free tier | Paid (as published) |
@@ -51,6 +53,7 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 | **Tavily** (`TAVILY_API_KEY`), https://app.tavily.com | Recommended primary | Web search across manufacturers, distributors, marketplaces, reviews, forums; returns page text | 1,000 credits/month, no card | ~$30/mo for 4,000 credits; pay-as-you-go ~US$0.008/credit |
 | **SerpApi** (`SERPAPI_API_KEY`), https://serpapi.com | Optional (or the only provider) | Google Shopping **Canada** listings with structured prices, ratings and delivery terms; Google web results if Tavily isn't set | 250 searches/month | from ~US$25/mo for 1,000 searches |
 | **Anthropic Claude** (`ANTHROPIC_API_KEY`), https://console.anthropic.com | Optional | Understands plain-language requests, extracts prices from page text, summarizes reviews. Every extracted fact is checked word-for-word against the source; failures are discarded and counted. | none | Claude Opus 5.5: US$4 / US$20 per million input/output tokens |
+| **Anthropic web search** (same `ANTHROPIC_API_KEY`) | Alternative primary | Claude's server-side `web_search` tool. Anthropic runs the search, so only `api.anthropic.com` must be reachable. Used automatically when no Tavily/SerpApi key is set, or force it with `PI_SEARCH_PROVIDER=anthropic`. Snippets are built only from the citations' verbatim `cited_text`. | none | US$10 per 1,000 searches plus tokens for the results read: roughly US$0.05–0.15 per query on Claude Opus 5.5 (estimate; Sources tab shows actual usage) |
 | **Bank of Canada Valet** | Built in | Daily FX rates (USD, EUR, CNY…→CAD) | free, no key | n/a |
 
 **Cost per research** (Tavily: basic search = 1 credit, advanced = 2):
@@ -176,7 +179,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 99 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 111 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
@@ -213,7 +216,7 @@ python -m scripts.smoke_test "Milwaukee 2767-20" --depth quick
 
 The server needs outbound HTTPS to:
 
-- `api.tavily.com` and/or `serpapi.com`
+- `api.tavily.com` and/or `serpapi.com` (or only `api.anthropic.com` when using Anthropic web search)
 - `www.bankofcanada.ca`
 - `api.anthropic.com` (if AI is on)
 - supplier websites (for page reading; optional, `FETCH_PAGES=false` disables it)
@@ -261,11 +264,14 @@ scripts/smoke_test.py   live check with real keys
 (`tests/test_review_fixes.py`), and mutation checks confirm the key tests fail if a fix is reverted. One
 residual risk is accepted for Phase 1 and listed under limitations (DNS rebinding).
 
-**Not verified against the live providers from the development environment.** The build environment's
-network policy blocked api.tavily.com, serpapi.com and bankofcanada.ca. The provider code follows each
-API's documented request/response format, and network refusals are handled (tested for real). But the first
-real run should be `scripts/smoke_test.py` with your keys. If a provider has changed its response format,
-the error appears as "unexpected response format" rather than as wrong data.
+**Not yet run against a live search provider.** The build environment's network policy blocked
+api.tavily.com, serpapi.com and bankofcanada.ca, and no API key was available to the app.
+- **Verified live:** the network-refusal path for Tavily, and a real request to api.anthropic.com through the
+  Anthropic web-search provider. It returned "API key rejected (401)" with a placeholder key, which confirms
+  the SDK call, network route and error handling.
+- **Not yet verified:** a successful real search. Run `scripts/smoke_test.py` with a real key first. If a
+  provider has changed its response format, the error appears as "unexpected response format", not as wrong
+  data.
 
 **Known limitations:**
 

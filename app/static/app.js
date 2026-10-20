@@ -136,7 +136,9 @@ function updateCostHint() {
   const serp = prov.find((p) => p.name === "SerpApi")?.configured;
   const ai = prov.find((p) => p.name.startsWith("Claude"))?.configured;
   const parts = [];
-  if (tav) parts.push(`${n} web searches (${credits} Tavily credits)`);
+  const web = state.status?.web_search;
+  if (web === "Tavily" && tav) parts.push(`${n} web searches (${credits} Tavily credits)`);
+  else if (web === "Anthropic web search") parts.push(`${n} Anthropic web searches (about US$0.01 each plus tokens)`);
   else if (serp) parts.push(`${n} web searches`);
   if (serp) parts.push("1 Google Shopping search");
   if (ai) parts.push("AI reading on");

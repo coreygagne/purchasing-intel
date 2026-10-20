@@ -44,6 +44,8 @@ class Settings:
     anthropic_model: str = "claude-opus-5-5"
     anthropic_effort: str = "medium"
     anthropic_base_url: str = "https://api.anthropic.com"
+    search_provider: str = "auto"  # auto | tavily | serpapi | anthropic
+    anthropic_search_effort: str = "low"
     database_path: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "purchasing.db")
     fetch_pages: bool = True
     fetch_max_pages: int = 10
@@ -80,6 +82,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         anthropic_model=env.get("PI_ANTHROPIC_MODEL") or "claude-opus-5-5",
         anthropic_effort=env.get("PI_ANTHROPIC_EFFORT") or "medium",
         anthropic_base_url=env.get("PI_ANTHROPIC_BASE_URL") or "https://api.anthropic.com",
+        search_provider=(env.get("PI_SEARCH_PROVIDER") or "auto").lower(),
+        anthropic_search_effort=env.get("PI_SEARCH_EFFORT") or "low",
         database_path=Path(db_path) if db_path else PROJECT_ROOT / "data" / "purchasing.db",
         fetch_pages=_bool(env.get("FETCH_PAGES"), True),
         fetch_max_pages=_int(env.get("FETCH_MAX_PAGES"), 10),

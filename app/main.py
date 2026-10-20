@@ -60,13 +60,13 @@ class Job:
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
-               llm: Any | None = None) -> FastAPI:
+               llm: Any | None = None, anthropic_client: Any | None = None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_path)
     if llm is None and settings.llm_enabled:
         from .llm import ClaudeAnalyst
         llm = ClaudeAnalyst(settings)
-    engine = ResearchEngine(settings, db, llm=llm, transport=transport)
+    engine = ResearchEngine(settings, db, llm=llm, transport=transport, anthropic_client=anthropic_client)
     jobs: dict[str, Job] = {}
     tasks: set[asyncio.Task] = set()
 
