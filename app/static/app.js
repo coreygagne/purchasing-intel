@@ -383,7 +383,7 @@ function offerRow(o, res, colCount) {
     td({ class: "r", "data-label": "Unit price" }, o.unit_price_cad != null ? h("div", { class: "price-cell" },
       h("span", { class: "num" }, money(o.unit_price_cad, "CAD")), h("span", { class: "sub" }, o.pack_text), mark("calculated"))
       : h("span", { class: "muted" }, o.pack_qty ? "n/a" : "single / not stated")),
-    td({ class: "r", "data-label": "In CAD" }, o.price_cad != null ? h("div", { class: "price-cell" }, h("span", { class: "num" }, money(o.price_cad, "CAD")),
+    td({ class: "r", "data-label": "In CAD" }, o.price_cad != null ? h("div", { class: "price-cell" }, h("span", { class: "num" }, (o.price_type === "range" ? "from " : "") + money(o.price_cad, "CAD")),
       o.currency !== "CAD" ? mark("calculated") : null) : h("span", { class: "muted" }, "n/a")),
     td({ class: "r", "data-label": "Delivered / landed" }, deliveredCell(o)),
     td({ class: "terms", "data-label": "Terms" },

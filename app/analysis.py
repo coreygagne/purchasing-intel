@@ -49,7 +49,8 @@ def apply_costs(offers: list[Offer], fx: dict[str, FxRate], assumptions: dict[st
             o.unit_price = round(o.price / o.pack_qty, 4)
             if o.price_cad is not None:
                 o.unit_price_cad = round(o.price_cad / o.pack_qty, 4)
-        o.delivered = delivered_estimate(_offer_dict(o), assumptions, quantity)
+        # Totals only make sense for a single, published price
+        o.delivered = delivered_estimate(_offer_dict(o), assumptions, quantity) if o.price_type == "listed" else None
 
 
 def _offer_dict(o: Offer) -> dict[str, Any]:
@@ -138,7 +139,7 @@ def detect_conflicts(offers: list[Offer]) -> list[dict[str, Any]]:
                               "text": f"Sources disagree on the price at {best.supplier}: {detail}. {outcome} "
                                       "Confirm before ordering."})
             for o in group:
-                o.flags.append("conflict: sources disagree on this listing's price")
+                o.flags.append("Sources disagree on this listing's price (see 'Watch out for').")
     # Same supplier, different listings/sources, different prices (informational)
     by_supplier: dict[str, list[Offer]] = defaultdict(list)
     for o in offers:
