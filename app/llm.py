@@ -281,7 +281,8 @@ class ClaudeAnalyst:
 
     async def extract(self, identity: Any, sources: list[Source], builder: OfferBuilder) -> dict[str, Any]:
         priced_sources = {o.source_id for o in builder.offers if o.price is not None and o.price_basis != "snippet"}
-        chosen: list[Source] = []
+        model_tokens = list(getattr(identity, "model_tokens", []) or [])
+        chosen: list[tuple[Source, str]] = []
         total = 0
         for s in sources:
             text = s.page_text or s.raw_content or ""
@@ -289,17 +290,17 @@ class ClaudeAnalyst:
                 continue
             if not text and not s.snippet:
                 continue
-            body = (text or s.snippet)[:MAX_SOURCE_CHARS]
+            # the part of a long page around the model number, not its opening navigation
+            body = ex.focus_text(text, model_tokens, MAX_SOURCE_CHARS) if text else s.snippet[:MAX_SOURCE_CHARS]
             if total + len(body) > MAX_TOTAL_CHARS:
                 break
             total += len(body)
-            chosen.append(s)
+            chosen.append((s, body))
         if not chosen:
             return {"quality": None, "alternatives": [], "verification": {"offers_kept": 0, "offers_rejected": 0,
                                                                          "points_kept": 0, "points_rejected": 0}}
         blocks = []
-        for s in chosen:
-            body = (s.page_text or s.raw_content or s.snippet)[:MAX_SOURCE_CHARS]
+        for s, body in chosen:
             blocks.append(f'<source id="{s.id}" type="{s.type}" url="{s.url}">\nTITLE: {s.title}\n'
                           f"SNIPPET: {s.snippet}\nTEXT: {body}\n</source>")
         name = getattr(identity, "name", "")

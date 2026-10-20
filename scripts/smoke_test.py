@@ -55,6 +55,15 @@ async def main() -> int:
         print(f"  query [{q['purpose']}] {q['query']!r}: {status}")
     print(f"Usage: {res['credits']}")
     print(f"Sources: {res['counts']}; pages read: {res['fetch']}")
+    for s in res["sources"]:
+        if s.get("fetch"):
+            f = s["fetch"]
+            how = f"read via {f['via']}" if f.get("ok") and f.get("via") else ("read" if f.get("ok") else "not read")
+            print(f"  page {s['id']} {s['domain']}: {how}" + ("" if f.get("ok") else f" ({f.get('error')})"))
+    for cur, fx in (res.get("fx") or {}).items():
+        print(f"FX {cur}->CAD {fx['rate_to_cad']} on {fx['rate_date']} ({fx['source']})")
+    if res.get("fx_errors"):
+        print(f"FX errors: {res['fx_errors']}")
     print("\nOffers (comparable first):")
     for o in res["offers"][:15]:
         price = f"{o['currency'] or '?'} {o['price']:.2f}" if o["price"] is not None else o["price_type"]

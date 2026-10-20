@@ -79,6 +79,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         st = provider_status(settings)
         return {**st, "version": __version__, "database": str(settings.database_path),
                 "page_fetching": settings.fetch_pages, "robots_txt": settings.respect_robots_txt,
+                "fetch_fallback": settings.fetch_fallback_enabled,
                 "home_province": settings.home_province}
 
     # ---------------------------------------------------------------- research

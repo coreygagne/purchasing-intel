@@ -55,6 +55,7 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 | **Anthropic Claude** (`ANTHROPIC_API_KEY`), https://console.anthropic.com | Optional | Understands plain-language requests, extracts prices from page text, summarizes reviews. Every extracted fact is checked word-for-word against the source; failures are discarded and counted. | none | Claude Opus 5.5: US$4 / US$20 per million input/output tokens |
 | **Anthropic web search** (same `ANTHROPIC_API_KEY`) | Alternative primary | Claude's server-side `web_search` tool (`web_search_20250305`, which returns citations). Anthropic runs the search, so only `api.anthropic.com` must be reachable. Used automatically when no Tavily/SerpApi key is set, or force it with `PI_SEARCH_PROVIDER=anthropic`. Snippets are built only from the citations' verbatim `cited_text`. | none | US$10 per 1,000 searches plus tokens for the results read. Measured: about US$0.09 per query on Claude Opus 5.5, about US$0.72 for a quick research including AI reading |
 | **Bank of Canada Valet** | Built in | Daily FX rates (USD, EUR, CNY…→CAD) | free, no key | n/a |
+| **Anthropic web fetch** (same `ANTHROPIC_API_KEY`) | Automatic fallback, on by default | Reads a supplier page or the Bank of Canada rate **only when this server can't connect to it** (DNS, network or timeout). See "Fallback reading" below. | none | Tokens only (the page text is billed as input). Measured on Claude Opus 5.5: see Status. `PI_FETCH_MODEL=claude-haiku-5-5` costs far less per page |
 
 **Cost per research** (Tavily: basic search = 1 credit, advanced = 2):
 
@@ -87,6 +88,28 @@ If the server can't resolve a host name, that page isn't read. On proxy-only net
 resolves names for the server, set `FETCH_TRUST_PROXY_DNS=true` to allow public-looking names; internal
 names and IP addresses stay blocked. Each page read and each whole research job also has a time limit
 (`FETCH_TIMEOUT_S`, `JOB_TIMEOUT_S`).
+
+**Fallback reading through Anthropic web fetch** (`FETCH_VIA_ANTHROPIC=true`, needs the Anthropic key). Some
+networks (a locked-down office firewall, a cloud sandbox) let the server reach `api.anthropic.com` but not
+supplier sites or the Bank of Canada. Then the app asks Anthropic's server-side `web_fetch` tool to fetch the
+same URL. The rules:
+- It is used **only when our side couldn't connect**: the host name didn't resolve, the connection failed, or
+  it timed out. A site's own answer (403 blocked, 404, login required, robots.txt "no") is final and never
+  routed around.
+- The site's robots.txt is fetched the same way and obeyed. If it can't be read, the page isn't read.
+- At most `FETCH_VIA_ANTHROPIC_MAX` (4) pages per research. IP addresses, internal names and non-standard
+  ports are refused as for direct reads.
+- The tool returns the page's text, not its HTML, so there's no schema.org data. The text goes only to the
+  AI reading step, where every price must be quoted word-for-word from it (the usual verification).
+  Such sources show "page read: yes, as text via Anthropic web fetch".
+- Anthropic's fetcher may return a **cached copy** of a page. The copy's date is shown on the source, and
+  prices read from it carry that date. A copy 3 or more days older than the research is flagged and treated as
+  low-confidence evidence.
+- Bank of Canada data fetched this way is still parsed by the app (the AI never writes the rate). The rate
+  is labelled "Bank of Canada daily exchange rate (fetched via Anthropic web fetch)". A copy whose rate is
+  more than 10 days old is rejected.
+- The model that issues the fetch is `PI_FETCH_MODEL` (default: `PI_ANTHROPIC_MODEL`). It only calls the
+  tool; nothing it writes is used.
 
 ---
 
@@ -181,7 +204,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 119 tests (+1 live-network test: PI_NETWORK_TESTS=1)
+python -m pytest -q            # 133 tests (+1 live-network test: PI_NETWORK_TESTS=1)
 ```
 
 The tests never call real providers. They run the real HTTP, parsing and analysis code against a
@@ -198,6 +221,10 @@ The tests never call real providers. They run the real HTTP, parsing and analysi
   review-page "offers" are all rejected;
 - the code-review regression suite (`tests/test_review_fixes.py`): aftermarket pages, multi-price pages,
   decimal commas, SSRF attempts, spreadsheet formula injection, and more;
+- the Anthropic web fetch fallback (`tests/test_anthropic_fetch.py`): it is used only for network failures,
+  never for 403/503/robots refusals; robots.txt is obeyed; the page limit holds; a garbled Bank of Canada
+  response is an error, not a rate; and an end-to-end research reads an unreachable page and the FX rate
+  through it;
 - browser tests of the UI (`tests/test_ui.py`, skipped if Playwright/Chromium is missing).
 
 To click through the UI with simulated data (a red banner marks it as a test harness):
@@ -223,6 +250,9 @@ The server needs outbound HTTPS to:
 - `api.anthropic.com` (if AI is on)
 - supplier websites (for page reading; optional, `FETCH_PAGES=false` disables it)
 
+If only `api.anthropic.com` is reachable, the Bank of Canada rate and up to 4 supplier pages per research
+are read through Anthropic web fetch instead (see "Fallback reading" above).
+
 The browser also loads the Archivo font from Google Fonts and falls back to a system font if blocked.
 
 ---
@@ -242,7 +272,8 @@ Bank of Canada rates).
 app/
   main.py          FastAPI routes, background research jobs
   research.py      workflow orchestration; analyze() is pure and re-runnable
-  providers/       Tavily, SerpApi (+ shared error taxonomy). Add a provider here.
+  providers/       Tavily, SerpApi, Anthropic web search, Anthropic web fetch fallback
+                   (+ shared error taxonomy). Add a provider here.
   fetch.py         polite page fetcher (robots.txt, size/time limits)
   extract.py       prices, currencies, pack sizes, MOQ, warranty, schema.org parsing, model matching
   evidence.py      sources and offers with evidence labels
@@ -286,16 +317,39 @@ The live runs also exposed real bugs, now fixed and covered by tests using the c
 - "Unavailable" wasn't treated as out of stock;
 - search-results pages were treated like product pages.
 
+**Second live run, with the Anthropic web fetch fallback (2026-10-20, same item, quick depth).** That sandbox
+can reach only `api.anthropic.com`, so this run verified FX conversion and page reading through the fallback:
+- **FX:** USD→CAD 1.4097 for 2026-10-19, from the Bank of Canada Valet JSON fetched via Anthropic web fetch
+  and parsed by the app. USD listings (Walmart, eBay) were converted and compared this time.
+- **Pages:** 10 supplier pages attempted directly; all failed DNS. Up to 4 were retried through the fallback.
+  3 were read (Walmart, an eBay catalogue page, Tenaquip). Global Sources was refused by Anthropic's
+  fetcher (`url_not_allowed`), and that was reported, not routed around. robots.txt was read the same way for
+  each site and obeyed.
+- **Evidence from fallback text:** Walmart's price (USD 246.80) was read from the fetched page text and passed
+  the word-for-word check.
+- **Result:** 43 sources, 14 listings, 9 comparable. Lowest and best value: eBay.ca at CAD 235.20 (verified
+  from the listing text). An eBay USD 51.89 snippet from a multi-seller catalogue page was flagged
+  "unusually low" and as low confidence, and kept out of the recommendation pool.
+- **Found and fixed:** Anthropic's fetcher can return a **cached copy**: Walmart's page came back dated
+  2026-09-24. Prices read from fallback text now carry the copy's date, and a copy 3+ days older than the
+  research is flagged and drops to low confidence, so it can't be recommended as today's price. A
+  fallback FX copy older than 10 days is rejected.
+
 **Not verified live:**
-- Tavily and SerpApi: blocked by that sandbox's network. The code follows their documented formats, and the
-  network-refusal path was tested for real.
-- Bank of Canada FX lookups.
-- Direct supplier-page reading.
+- Tavily and SerpApi: blocked by that sandbox's network policy (the proxy refuses `api.tavily.com` and
+  `serpapi.com`). The code follows their documented formats, and the network-refusal path was tested for real.
+- Direct (non-fallback) Bank of Canada and supplier-page reads: the code is the same as in tests, but that
+  sandbox can't reach those sites. On a normal office network they are used first and the fallback stays idle.
 
 **Measured cost (Claude Opus 5.5, quick depth = 3 planned + 3 AI-suggested searches):**
-- About 93k input and 14k output tokens plus 6 web searches, roughly US$0.72 per research.
-- Expect roughly US$1.00–1.10 for standard depth.
-- Using Tavily for search instead cuts this to the AI-reading portion only (about US$0.15).
+- First run: about 93k input and 14k output tokens plus 6 web searches, roughly US$0.72 per research.
+- Second run, with the fallback: about US$1.01. That's US$0.55 for search, US$0.19 for AI planning and
+  reading, and US$0.26 for 9 web fetches (62k input tokens: 4 pages, their 4 robots.txt files, 1 FX rate).
+  That's about US$0.06 per fallback page including its robots.txt. `PI_FETCH_MODEL=claude-haiku-5-5` would
+  make that part a small fraction of this, at Haiku 5.5's US$0.10 per million input tokens.
+- Expect roughly US$1.00–1.30 for standard depth with Anthropic search.
+- Using Tavily for search removes the US$0.55 search part. With direct page and FX access (a normal network)
+  the fallback cost is zero, leaving roughly US$0.15–0.20 per research for AI reading.
 
 **Real-data dry run (development environment, 2026-10-20).** Three real web searches for "Milwaukee
 2767-20" were captured with the development assistant's own search tool and fed through the full engine:
@@ -335,7 +389,8 @@ provider key is still needed to see real prices.
 
 **Suggested next steps:**
 
-1. Run the smoke test with real keys on a few typical purchases and tune the supplier directory and queries.
+1. Add a Tavily key (and optionally SerpApi) and run the smoke test on the office network with a few
+   typical purchases; tune the supplier directory and queries.
 2. Add your preferred/approved suppliers and any negotiated account pricing as a first-class source.
 3. Add sign-in, or put the app behind your company's SSO proxy, before sharing it beyond one machine.
 4. Scheduled re-checks of saved comparisons to build price history automatically.

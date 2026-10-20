@@ -20,3 +20,22 @@ async def fake_resolve(host: str) -> list[str]:
 @pytest.fixture(autouse=True)
 def _offline_dns(monkeypatch):
     monkeypatch.setattr(fetch, "resolve_host", fake_resolve)
+
+
+class _NoNetworkAnthropic:
+    """Stands in for a real Anthropic client wherever a test didn't inject a stub, so no test reaches the API."""
+
+    def __init__(self):
+        from types import SimpleNamespace
+
+        async def create(**kw):
+            from app.providers.anthropic_fetch import AnthropicFetchError
+            raise AnthropicFetchError("no Anthropic network access in tests")
+
+        self.messages = SimpleNamespace(create=create)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_anthropic_fetch(monkeypatch):
+    from app.providers import anthropic_fetch
+    monkeypatch.setattr(anthropic_fetch, "_make_client", lambda *a, **k: _NoNetworkAnthropic())

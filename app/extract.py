@@ -743,3 +743,16 @@ def page_text(html: str, limit: int = 20000) -> str:
         tag.decompose()
     text = soup.get_text(" ", strip=True)
     return re.sub(r"\s+", " ", text)[:limit]
+
+
+def focus_text(text: str, tokens: list[str], limit: int) -> str:
+    """At most `limit` characters of `text`, starting shortly before the first model-number mention that has a
+    price after it (else the first mention). Pages read as plain text often open with long navigation."""
+    if len(text) <= limit:
+        return text
+    mentions = sorted(m.start() for t in tokens for m in _token_regex(t).finditer(text))
+    if not mentions:
+        return text[:limit]
+    priced = next((i for i in mentions if find_prices(text[i:i + 1500])), mentions[0])
+    start = max(0, priced - limit // 5)
+    return text[start:start + limit]

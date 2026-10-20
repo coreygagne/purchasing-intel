@@ -22,10 +22,11 @@ from . import extract as ex
 from .config import Settings
 from .db import Database, iso
 from .evidence import Offer, OfferBuilder, Source, apply_match, build_sources, is_seller_source, add_source
-from .fetch import PageFetcher
+from .fetch import FetchResult, PageFetcher
 from .fx import FxRate, FxService
 from .import_costs import clean_assumptions, general_notes, LINKS
 from .providers import ProviderError, ProviderSet, ShoppingListing, build_providers
+from .providers.anthropic_fetch import VIA, AnthropicFetcher, AnthropicPageReader
 from .providers.base import SearchHit
 from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER
 
@@ -70,6 +71,8 @@ QUERY_TEMPLATES = {
 FATAL_KINDS = {"auth", "quota", "not_configured"}
 AI_PLAN_TIMEOUT_S = 60
 AI_EXTRACT_TIMEOUT_S = 150
+FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
+PAGE_TEXT_CHARS = 15000
 
 
 def _ai_error(exc: Exception) -> str:
@@ -183,11 +186,21 @@ class ResearchEngine:
                                   timeout_s=self.settings.fetch_timeout_s, max_bytes=self.settings.fetch_max_bytes,
                                   respect_robots=self.settings.respect_robots_txt,
                                   allow_unresolved=self.settings.fetch_trust_proxy_dns)
+            # Used only for what this server can't connect to itself (never for a site's own refusal)
+            ai_fetcher = (AnthropicFetcher(self.settings.anthropic_api_key or "",
+                                           model=self.settings.anthropic_fetch_model or self.settings.anthropic_model,
+                                           base_url=self.settings.anthropic_base_url, client=self.anthropic_client)
+                          if self.settings.fetch_fallback_enabled else None)
+            # page text is only used by the AI reading step
+            reader = (AnthropicPageReader(ai_fetcher, user_agent=self.settings.fetch_user_agent,
+                                          max_pages=self.settings.fetch_via_anthropic_max,
+                                          respect_robots=self.settings.respect_robots_txt)
+                      if ai_fetcher is not None and self.llm is not None and self.settings.fetch_pages else None)
             llm_usage: dict[str, Any] = {}
 
             # 1. Understand the request ------------------------------------------------
             progress("Understanding the request", 5)
-            identity, ref_fetch = await self._identify(query, fetcher, providers)
+            identity, ref_fetch = await self._identify(query, fetcher, providers, reader)
             if self.llm is not None:
                 try:
                     plan_info = await asyncio.wait_for(self.llm.plan(identity.name, identity.input_type),
@@ -227,16 +240,19 @@ class ResearchEngine:
                                      snippet="Page you provided", purpose="input_url", provider="page fetch",
                                      brand_words=identity.brand_words)
                 ref_src.fetch = {"ok": ref_fetch.ok, "status": ref_fetch.status, "error": ref_fetch.error,
-                                 "fetched_at": ref_fetch.fetched_at, "structured": False}
+                                 "fetched_at": ref_fetch.fetched_at, "structured": False, "via": ref_fetch.via}
                 if ref_fetch.ok and ref_fetch.html:
-                    ref_src.page_text = ex.page_text(ref_fetch.html, 15000)
+                    ref_src.page_text = ex.page_text(ref_fetch.html, PAGE_TEXT_CHARS)
                     found = builder.from_structured(ref_src, ex.structured_products(ref_fetch.html),
                                                     identity.model_tokens, ref_fetch.fetched_at, is_reference=True)
                     ref_src.fetch["structured"] = found
+                elif ref_fetch.ok and ref_fetch.text:
+                    ref_src.page_text = ex.focus_text(ref_fetch.text, identity.model_tokens, PAGE_TEXT_CHARS)
             builder.from_shopping(listings, sources)
 
             progress("Reading supplier pages for price data", 50)
-            fetch_attempts, fetch_failures = await self._fetch_and_extract(sources, builder, identity, fetcher)
+            fetch_attempts, fetch_failures, fetched_via = await self._fetch_and_extract(sources, builder, identity,
+                                                                                       fetcher, reader)
 
             if self.llm is not None:
                 progress("AI is reading page text (every extracted fact is checked against the source)", 70)
@@ -253,25 +269,30 @@ class ResearchEngine:
 
             # 4. FX + analysis --------------------------------------------------------------
             progress("Converting currencies (Bank of Canada)", 82)
-            fx_service = FxService(self.db, client)
+            fx_service = FxService(self.db, client, fallback=ai_fetcher)
             currencies = {o.currency for o in builder.offers if o.currency and o.price is not None}
             fx = await fx_service.rates(currencies)
 
             progress("Comparing offers", 90)
+            credits = providers.credits()
+            if ai_fetcher is not None and (ai_fetcher.requests or ai_fetcher.tokens["input_tokens"]):
+                credits["anthropic_web_fetches"] = ai_fetcher.requests
+                llm_usage["web_fetch"] = dict(ai_fetcher.tokens)
             meta = {
                 "query": query, "depth": depth, "quantity": req.quantity, "researched_at": iso(),
                 "duration_s": round(time.monotonic() - started, 1),
                 "providers": {"web": providers.web.name,
                               "shopping": providers.shopping.name if providers.shopping else None,
                               "llm": self.settings.anthropic_model if self.llm is not None else None,
-                              "fx": "Bank of Canada Valet"},
+                              "fx": "Bank of Canada Valet",
+                              "fetch_fallback": VIA if ai_fetcher is not None else None},
                 "queries": [asdict(p) for p in plan] + ([{"query": shopping_status["query"], "purpose": "shopping",
                                                            "country": "ca", "status": shopping_status["status"],
                                                            "result_count": shopping_status.get("result_count", 0),
                                                            "error": shopping_status.get("error"),
                                                            "provider": "SerpApi"}] if shopping_status else []),
-                "credits": {**providers.credits(), **({"llm_usage": llm_usage} if llm_usage else {})},
-                "fetch": {"attempted": fetch_attempts, "failed": fetch_failures,
+                "credits": {**credits, **({"llm_usage": llm_usage} if llm_usage else {})},
+                "fetch": {"attempted": fetch_attempts, "failed": fetch_failures, "via_anthropic": fetched_via,
                           "robots_respected": self.settings.respect_robots_txt},
                 "fx_errors": fx_service.errors,
             }
@@ -282,13 +303,20 @@ class ResearchEngine:
             return result
 
     # ---------------------------------------------------------------- helpers
-    async def _identify(self, query: str, fetcher: PageFetcher, providers: ProviderSet):
+    async def _identify(self, query: str, fetcher: PageFetcher, providers: ProviderSet,
+                        reader: AnthropicPageReader | None = None):
         input_type = ex.classify_input(query)
         if input_type != "url":
             tokens = ex.model_tokens(query)
             return Identity(query, input_type, query, tokens, _brand_words(query), "your request"), None
         url = query.strip()
         fr = await fetcher.fetch(url) if self.settings.fetch_pages else None
+        if fr is not None and not fr.ok and fr.network_failure and reader is not None:
+            via = await reader.read(url)
+            if via.ok:
+                fr = via
+            else:
+                fr.error = f"{fr.error}; {via.error}"
         notes: list[str] = []
         name, source, brand, mpn = None, "", None, None
         if fr is not None and fr.ok and fr.html:
@@ -299,6 +327,11 @@ class ResearchEngine:
                 name, brand, mpn, source = p.name, p.brand, p.mpn, "product page data (schema.org)"
             else:
                 name, source = ex.page_title(fr.html), "page title"
+        elif fr is not None and fr.ok and fr.text:
+            heading = next((ln.lstrip("#").strip() for ln in fr.text.splitlines()
+                            if re.match(r"^#{1,2}\s+\S", ln.strip())), None)
+            name = fr.title or (heading[:150] if heading and len(heading) > 5 else None)
+            source = f"page title (page read via {VIA})"
         else:
             notes.append(f"Could not read the page you provided ({fr.error if fr else 'page fetching disabled'}).")
             if providers.tavily is not None:
@@ -360,7 +393,8 @@ class ResearchEngine:
         return hits
 
     async def _fetch_and_extract(self, sources: list[Source], builder: OfferBuilder, identity: Identity,
-                                 fetcher: PageFetcher) -> tuple[int, int]:
+                                 fetcher: PageFetcher, reader: AnthropicPageReader | None = None
+                                 ) -> tuple[int, int, int]:
         sellers = [s for s in sources if is_seller_source(s) and "input_url" not in s.purposes
                    and "shopping" not in s.purposes]
         def priority(s: Source) -> tuple[int, int, int]:
@@ -390,10 +424,45 @@ class ResearchEngine:
                     done_ids.add(s.id)
             else:
                 failures += 1
+        via_ok = 0
+        if reader is not None:
+            # only pages this server couldn't connect to; a site's own refusal is final
+            retry = [s for s, fr in fetched if not fr.ok and fr.network_failure][: reader.remaining]
+            for s, fr in await self._read_via(reader, retry):
+                if fr.ok and fr.text:
+                    s.fetch = {"ok": True, "status": None, "error": None, "fetched_at": fr.fetched_at,
+                               "structured": False, "via": VIA, "direct_error": s.fetch["error"]}
+                    s.page_text = ex.focus_text(fr.text, identity.model_tokens, PAGE_TEXT_CHARS)
+                    failures -= 1
+                    via_ok += 1
+                else:
+                    s.fetch["error"] = f"{s.fetch['error']}; {fr.error}"
         for s in sellers:
             builder.from_snippet(s)
         dedupe_snippet_offers(builder.offers, done_ids)
-        return len(to_fetch), failures
+        return len(to_fetch), failures, via_ok
+
+    @staticmethod
+    async def _read_via(reader: AnthropicPageReader, sources: list[Source]) -> list[tuple[Source, FetchResult]]:
+        if not sources:
+            return []
+        tasks = {asyncio.create_task(reader.read(s.url)): s for s in sources}
+        done, pending = await asyncio.wait(tasks, timeout=FALLBACK_STAGE_TIMEOUT_S)
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        out = []
+        for t, s in tasks.items():
+            if t in pending:
+                err = f"{VIA} gave up after {FALLBACK_STAGE_TIMEOUT_S}s"
+            elif t.exception() is not None:
+                log.warning("%s failed for %s: %r", VIA, s.url, t.exception())
+                err = f"{VIA} failed: {type(t.exception()).__name__}"
+            else:
+                out.append((s, t.result()))
+                continue
+            out.append((s, FetchResult(s.url, False, None, None, err, iso(), via=VIA)))
+        return out
 
 
 def dedupe_snippet_offers(offers: list[Offer], structured_source_ids: set[str]) -> None:
@@ -434,6 +503,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     an.apply_costs(offers, fx, clean, quantity)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity)
+    an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
     rec = an.recommend(offers, tokens)

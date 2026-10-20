@@ -376,6 +376,10 @@ class OfferBuilder:
         Title, supplier, pack size and condition are taken from the source, never from the model."""
         base = _base_offer(self._next_id(), src, url=src.url, supplier=None, title=src.title,
                            provider="Claude (verified)", brand_words=self.brand_words)
+        fetch = src.fetch or {}
+        if fetch.get("ok") and fetch.get("fetched_at") and _normalized(context.strip("…")) in _normalized(src.page_text):
+            # the price is as of the page copy it was read from (a fetch fallback may return a cached copy)
+            base["observed_at"] = fetch["fetched_at"]
         p = ex.parse_price_text(item["price_text"])
         stated = (item.get("currency_stated") or "").strip().upper()
         if not re.fullmatch(r"[A-Z]{3}", stated) or stated not in context.upper():
@@ -405,6 +409,13 @@ def ex_text_in(text: str, src: Source) -> bool:
 
 def _squash(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def _normalized(text: str | None) -> str:
+    """Like _squash, also unifying typographic quotes and dashes (as the AI-quote check does)."""
+    text = (text or "").translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
+                                                 "\xa0": " "}))
+    return _squash(text)
 
 
 def _delivery_cost(text: str) -> float | None:

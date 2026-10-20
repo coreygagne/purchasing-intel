@@ -41,6 +41,11 @@ async function api(path, opts = {}) {
 // ------------------------------------------------------------------ formatting
 const dtFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short" });
 const dFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
+function tokensText(v) {
+  if (v && typeof v === "object") return `${v.input_tokens ?? "?"} in / ${v.output_tokens ?? "?"} out`;
+  return String(v);
+}
+
 function when(iso) { if (!iso) return "unknown time"; const d = new Date(iso); return isNaN(d) ? iso : dtFmt.format(d); }
 function day(iso) { const d = new Date(iso); return isNaN(d) ? iso : dFmt.format(d); }
 function ago(iso) {
@@ -124,7 +129,7 @@ function providerPanel() {
         h("td", {}, p.name), h("td", {}, p.role),
         h("td", {}, p.configured ? "Configured" : `Not configured (${p.env})`))))),
     h("p", { class: "small muted", style: "margin:10px 0 0" },
-      `Database: ${st.database}. Page reading ${st.page_fetching ? "on" : "off"}`,
+      `Database: ${st.database}. Page reading ${st.page_fetching ? "on" : "off"}${st.page_fetching && st.fetch_fallback ? " (Anthropic web fetch if this server can't connect)" : ""}`,
       st.robots_txt ? ", respecting robots.txt." : "."));
 }
 function updateCostHint() {
@@ -696,9 +701,11 @@ function sourcesTab(res) {
         h("dt", {}, "Researched"), h("dd", {}, `${when(res.researched_at)}, took ${res.duration_s}s, ${res.depth} depth`),
         h("dt", {}, "Search providers"), h("dd", {}, [res.providers.web, res.providers.shopping].filter(Boolean).join(" and ")),
         h("dt", {}, "AI reading"), h("dd", {}, res.providers.llm ? `${res.providers.llm} (facts verified against source text)` : "off"),
-        h("dt", {}, "Usage"), h("dd", {}, Object.entries(res.credits || {}).filter(([k]) => k !== "llm_usage").map(([k, v]) => `${k.replace("_", " ")}: ${v}`).join(", ") || "n/a",
-          res.credits?.llm_usage ? `; AI tokens: ${Object.values(res.credits.llm_usage).filter(Boolean).map((u) => `${u.input_tokens ?? "?"} in / ${u.output_tokens ?? "?"} out`).join(", ")}` : ""),
-        h("dt", {}, "Supplier pages read"), h("dd", {}, `${(res.fetch?.attempted || 0) - (res.fetch?.failed || 0)} of ${res.fetch?.attempted || 0}${res.fetch?.robots_respected ? " (robots.txt respected)" : ""}`),
+        h("dt", {}, "Usage"), h("dd", {}, Object.entries(res.credits || {}).filter(([k]) => k !== "llm_usage").map(([k, v]) => `${k.replace(/_/g, " ")}: ${tokensText(v)}`).join(", ") || "n/a",
+          res.credits?.llm_usage ? `; AI tokens: ${Object.entries(res.credits.llm_usage).filter(([, u]) => u).map(([k, u]) => `${k.replace(/_/g, " ")} ${tokensText(u)}`).join(", ")}` : ""),
+        h("dt", {}, "Supplier pages read"), h("dd", {}, `${(res.fetch?.attempted || 0) - (res.fetch?.failed || 0)} of ${res.fetch?.attempted || 0}`
+          + (res.fetch?.via_anthropic ? ` (${res.fetch.via_anthropic} as text via Anthropic web fetch, because this server couldn't connect)` : "")
+          + (res.fetch?.robots_respected ? "; robots.txt respected" : "")),
         h("dt", {}, "Evidence"), h("dd", {}, `${counts.sources} sources, ${counts.offers} listings, ${counts.priced} with prices, ${counts.comparable} comparable`))),
     h("section", { class: "panel" }, h("h3", {}, "Searches run"),
       h("table", { class: "simple" }, h("thead", {}, h("tr", {}, h("th", {}, "Query"), h("th", {}, "Purpose"), h("th", {}, "Provider"), h("th", {}, "Result"))),
@@ -709,7 +716,7 @@ function sourcesTab(res) {
         h("thead", {}, h("tr", {}, h("th", {}, "ID"), h("th", {}, "Source"), h("th", {}, "Type"), h("th", {}, "Retrieved"), h("th", {}, "Page read"))),
         h("tbody", {}, res.sources.map((s) => h("tr", {}, h("td", {}, s.id), h("td", {}, link(s.url, s.title), h("div", { class: "sub" }, s.domain)),
           h("td", {}, s.type, s.country ? h("div", { class: "sub" }, country(s.country)) : null), h("td", { class: "num" }, when(s.retrieved_at)),
-          h("td", { class: "small" }, s.fetch ? (s.fetch.ok ? (s.fetch.structured ? "yes, price data found" : "yes, no price data") : `no: ${s.fetch.error}`) : "not attempted")))))) ),
+          h("td", { class: "small" }, s.fetch ? (s.fetch.ok ? (s.fetch.via ? `yes, as text via ${s.fetch.via}, copy dated ${day(s.fetch.fetched_at)} (direct: ${s.fetch.direct_error || "failed"})` : s.fetch.structured ? "yes, price data found" : "yes, no price data") : `no: ${s.fetch.error}`) : "not attempted")))))) ),
     h("section", { class: "panel" }, h("h3", {}, "Limits of this research"),
       h("ul", { class: "bullets" }, res.limits.map((l) => h("li", {}, l)))));
 }

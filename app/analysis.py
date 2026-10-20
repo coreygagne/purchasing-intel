@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any
 
 from . import extract as ex
@@ -113,6 +114,33 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             o.flags.append("Supplier not in the built-in directory - verify the business before ordering.")
         if not tokens and o.comparable:
             o.flags.append("Equivalence not verified (no model number) - compare specs before choosing.")
+
+
+STALE_COPY_DAYS = 3
+
+
+def _when(value: str | None) -> datetime | None:
+    try:
+        t = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def stale_copy_flags(offers: list[Offer], researched_at: str | None) -> None:
+    """A price observed well before the research ran came from an old copy of the page (Anthropic web fetch
+    can return a cached copy). It is shown with its date but is no longer strong evidence of today's price."""
+    ref = _when(researched_at) or datetime.now(timezone.utc)
+    for o in offers:
+        seen = _when(o.observed_at)
+        if seen is None or o.price is None:
+            continue
+        age = (ref - seen).days
+        if age >= STALE_COPY_DAYS:
+            o.flags.append(f"Price read from a copy of the page dated {seen.date().isoformat()} ({age} days before "
+                           "this research) - confirm the current price.")
+            if o.confidence in ("high", "medium"):
+                o.confidence = "low"
 
 
 def detect_conflicts(offers: list[Offer]) -> list[dict[str, Any]]:
@@ -521,6 +549,8 @@ def _fetch_reason(error: str | None) -> str:
     e = (error or "").lower()
     if "could not resolve" in e:
         return "host name could not be resolved (network/DNS)"
+    if "could not be reached" in e:
+        return "network error"
     if "robots.txt" in e:
         return "the site's robots.txt doesn't allow it"
     if "private or internal" in e or "port" in e or "only http" in e:

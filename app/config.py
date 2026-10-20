@@ -53,6 +53,11 @@ class Settings:
     fetch_max_bytes: int = 2_000_000
     respect_robots_txt: bool = True
     fetch_trust_proxy_dns: bool = False
+    # When this server can't connect to a page or the Bank of Canada (DNS/network/timeout - never a site's 403 or
+    # robots.txt "no"), fetch it through Anthropic's web fetch tool instead. Needs the Anthropic key.
+    fetch_via_anthropic: bool = True
+    fetch_via_anthropic_max: int = 4
+    anthropic_fetch_model: str | None = None  # defaults to anthropic_model
     fetch_user_agent: str = (
         "Mozilla/5.0 (compatible; MidcontinentPurchasingResearch/0.1; "
         "+internal purchasing research tool)"
@@ -65,6 +70,10 @@ class Settings:
     @property
     def llm_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def fetch_fallback_enabled(self) -> bool:
+        return self.fetch_via_anthropic and bool(self.anthropic_api_key)
 
 
 def load_settings(env_file: Path | None = None) -> Settings:
@@ -91,6 +100,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
         fetch_timeout_s=_float(env.get("FETCH_TIMEOUT_S"), 8.0),
         respect_robots_txt=_bool(env.get("RESPECT_ROBOTS_TXT"), True),
         fetch_trust_proxy_dns=_bool(env.get("FETCH_TRUST_PROXY_DNS"), False),
+        fetch_via_anthropic=_bool(env.get("FETCH_VIA_ANTHROPIC"), True),
+        fetch_via_anthropic_max=_int(env.get("FETCH_VIA_ANTHROPIC_MAX"), 4),
+        anthropic_fetch_model=env.get("PI_FETCH_MODEL") or None,
         search_timeout_s=_float(env.get("SEARCH_TIMEOUT_S"), 25.0),
         job_timeout_s=_float(env.get("JOB_TIMEOUT_S"), 420.0),
         duplicate_window_hours=_int(env.get("DUPLICATE_WINDOW_HOURS"), 12),
