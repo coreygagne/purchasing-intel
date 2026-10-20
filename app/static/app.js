@@ -185,7 +185,7 @@ async function startResearch(opts = {}) {
   const query = opts.query ?? $("#q").value.trim();
   if (!query) { flash(h("div", { class: "notice info" }, "Type what you need to buy, then choose Research.")); $("#q").focus(); return; }
   const depth = opts.depth || document.querySelector('input[name="depth"]:checked').value;
-  const qty = Number($("#qty").value) || null;
+  const qty = opts.quantity !== undefined ? opts.quantity : (Number($("#qty").value) || null);
   flash(null);
   const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty,
     force: !!opts.force, comparison_id: opts.comparisonId ?? null }) });
@@ -290,7 +290,7 @@ function header(comp, res) {
     h("div", { class: "actions" },
       saveBtn,
       h("button", { class: "btn", type: "button", title: "Runs a new search and adds new price observations (uses credits)",
-        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id }) }, "Search again"),
+        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null }) }, "Search again"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.csv` }, "Export CSV"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.xlsx` }, "Export Excel")));
 }
@@ -314,6 +314,8 @@ function recCard(kind, rec, res, offersById) {
     h("div", { class: "who" }, rec.supplier, " ", h("span", { class: "sub" }, `${o.supplier_type || ""}, ${country(o.country)}`)),
     h("div", { class: "small" }, link(rec.url, "Open listing"), ` (observed ${when(o.observed_at)})`),
     h("ul", { class: "why" }, rec.explanation.map((e) => h("li", {}, e))),
+    (o.flags || []).length ? h("div", { class: "small", style: "margin-top:10px" },
+      h("b", {}, "Check before ordering: "), o.flags.slice(0, 3).join(" ")) : null,
     isValue ? h("details", {}, h("summary", { class: "small" }, "How the score was built"),
       h("table", { class: "factors" }, h("tbody", {}, rec.factors.map((f) => h("tr", {},
         h("td", {}, f.factor), h("td", { class: "muted" }, f.evidence),
@@ -505,7 +507,7 @@ function qualityTab(res) {
       h("h3", {}, "AI summary of review sources"),
       h("p", { class: "small muted", style: "margin-top:0" }, summ.label,
         summ.verification ? ` ${summ.verification.points_kept} point(s) kept, ${summ.verification.points_rejected} dropped because their quotes couldn't be found in the sources.` : ""),
-      summ.overall_note ? h("p", {}, summ.overall_note) : null,
+      summ.overall_note ? h("p", {}, h("span", { class: "muted" }, `${summ.overall_note_label || "AI comment"}: `), summ.overall_note) : null,
       [["praise", "Recurring praise"], ["criticism", "Recurring criticism"], ["reliability_issues", "Reliability issues"]].map(([k, label]) =>
         h("div", {}, h("h4", {}, label), (summ[k] || []).length ? (summ[k] || []).map((p) => h("div", { class: "point" },
           h("div", { class: "p" }, p.point, " ", p.source_ids.map((id) => srcRef(res, id))),
@@ -554,7 +556,7 @@ function channelsTab(res) {
         link(a.url, a.title), ` at ${a.supplier}. `, h("span", { class: "small muted" }, (a.notes || []).join(" "))))) :
         h("p", { class: "empty" }, "None were found."),
       (res.alternatives_ai || []).length ? [h("h4", {}, "Mentioned by sources (AI-read, quote verified)"),
-        h("ul", { class: "plain quote-list" }, res.alternatives_ai.map((a) => h("li", {}, h("b", {}, a.name), ` (${a.why}) `,
+        h("ul", { class: "plain quote-list" }, res.alternatives_ai.map((a) => h("li", {}, h("b", {}, a.name), " ",
           h("q", {}, a.quote), " ", srcRef(res, a.source_id))))] : null));
 }
 

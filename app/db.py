@@ -165,10 +165,11 @@ class Database:
         payload = json.dumps(result)
         with self.tx() as c:
             if comparison_id is not None:
+                # A refresh keeps the user's name for the comparison
                 c.execute(
-                    "UPDATE comparisons SET title = ?, product_key = ?, result_json = ?,"
+                    "UPDATE comparisons SET product_key = ?, result_json = ?,"
                     " last_researched_at = ?, updated_at = ? WHERE id = ?",
-                    (title, product_key, payload, result.get("researched_at", now), now, comparison_id),
+                    (product_key, payload, result.get("researched_at", now), now, comparison_id),
                 )
                 return comparison_id
             cur = c.execute(
@@ -263,11 +264,11 @@ class Database:
         sql = "SELECT * FROM price_observations"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY observed_at ASC, id ASC LIMIT ?"
+        sql += " ORDER BY observed_at DESC, id DESC LIMIT ?"  # newest first so the limit never hides recent data
         args.append(limit)
         with self.tx() as c:
             rows = c.execute(sql, args).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in reversed(rows)]
 
     # -------------------------------------------------------------------- fx
     def get_fx(self, currency: str, max_age_hours: int = 24) -> dict[str, Any] | None:

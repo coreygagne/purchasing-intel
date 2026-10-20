@@ -121,9 +121,16 @@ def delivered_estimate(offer: dict[str, Any], assumptions: dict[str, float | Non
     missing: list[str] = []
 
     ship = offer.get("shipping_cost")
-    if ship is not None:
+    ship_applies = ship is not None and (domestic or offer.get("shipping_scope") == "canada")
+    if ship is not None and not ship_applies:
+        notes.append(f"The listing says \"{offer.get('shipping_text')}\", but that may not apply to shipping to "
+                     "Canada, so it isn't used.")
+    if ship_applies:
+        converted = offer.get("currency") not in (None, "CAD")
         ship_cad = ship * (offer.get("fx_rate") or 1.0)
-        comps.append(_component("Shipping", ship_cad, "quoted", offer.get("shipping_text") or ""))
+        comps.append(_component("Shipping", ship_cad, "calculated" if converted and ship else "quoted",
+                                (offer.get("shipping_text") or "") + (f" (converted from {offer.get('currency')})"
+                                                                      if converted and ship else "")))
         if packs > 1:
             notes.append("Quoted shipping is for one listing; larger orders may differ.")
     else:

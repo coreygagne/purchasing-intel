@@ -112,10 +112,11 @@ def test_assumptions_recalculate_without_new_search(tmp_path):
         amazon = next(o for o in comp["result"]["offers"] if o["supplier"] == "Amazon.com")
         d = amazon["delivered"]
         assert d["kind"] == "landed" and d["label"] == "estimated" and d["complete"]
-        # the listing quotes FREE delivery, which takes precedence over the shipping assumption
-        assert d["value"] == round(amazon["price_cad"] + 0 + amazon["price_cad"] * 0.25 + 12, 2)
+        # a US seller's "FREE delivery" isn't shipping to Canada: the user's import assumption applies
+        assert d["value"] == round(amazon["price_cad"] + 25 + amazon["price_cad"] * 0.25 + 12, 2)
         ship = next(x for x in d["components"] if x["label"] == "Shipping")
-        assert ship["basis"] == "quoted"
+        assert ship["basis"] == "assumption"
+        assert any("may not apply to shipping to Canada" in n for n in d["notes"])
         kms = next(o for o in comp["result"]["offers"] if o["supplier"] == "KMS Tools" and o["comparable"])
         assert kms["delivered"]["kind"] == "delivered" and kms["delivered"]["label"] == "calculated"
         assert comp["assumptions"]["surtax_pct"] == 25.0

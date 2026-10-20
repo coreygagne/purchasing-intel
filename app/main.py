@@ -113,7 +113,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             try:
                 req = ResearchRequest(query=query, depth=body.depth, quantity=body.quantity,
                                       comparison_id=body.comparison_id)
-                result = await engine.run(req, progress)
+                result = await asyncio.wait_for(engine.run(req, progress), timeout=settings.job_timeout_s)
                 existing = db.get_comparison(body.comparison_id) if body.comparison_id else None
                 if existing and existing.get("assumptions"):
                     result = reanalyze(result, existing["assumptions"], settings.home_province)
@@ -126,6 +126,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             except ResearchError as exc:
                 job.status, job.error = "failed", {"kind": exc.kind, "message": str(exc), "details": exc.details}
                 db.finish_search(search_id, "failed", error=str(exc))
+            except asyncio.TimeoutError:
+                msg = f"Research took longer than {settings.job_timeout_s:.0f}s and was stopped."
+                job.status, job.error = "failed", {"kind": "timeout", "message": msg}
+                db.finish_search(search_id, "failed", error=msg)
             except Exception as exc:  # noqa: BLE001 - never leave a job hanging
                 log.exception("research failed")
                 job.status = "failed"
@@ -219,7 +223,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
 def price_history(obs: list[dict[str, Any]]) -> dict[str, Any]:
     """Real observations only. A chart is offered only with enough comparable data."""
-    usable = [o for o in obs if o.get("price_cad") is not None and o.get("match_level") in ("exact", "unverified")
+    # Only exact model matches can form a price trend; without a model number the listings may be
+    # different products, so they are listed but never charted as one line.
+    usable = [o for o in obs if o.get("price_cad") is not None and o.get("match_level") == "exact"
               and (o.get("condition") in (None, "new")) and o.get("price_type") == "listed"]
     dates = {o["observed_at"][:10] for o in usable}
     by_supplier: dict[str, list[dict[str, Any]]] = {}
@@ -233,8 +239,11 @@ def price_history(obs: list[dict[str, Any]]) -> dict[str, Any]:
         reason = None
     elif len(pack_sizes) > 1:
         reason = "Observations cover different pack sizes, so they are listed rather than charted."
+    elif obs and not any(o.get("match_level") == "exact" for o in obs):
+        reason = ("No model number was given, so listings may be different products and aren't charted as one "
+                  "price trend. Showing the actual observations instead.")
     else:
-        reason = (f"Not enough comparable history to chart yet ({len(usable)} comparable observation(s) on "
+        reason = (f"Not enough comparable history to chart yet ({len(usable)} exact-model observation(s) on "
                   f"{len(dates)} day(s); need at least 3 on 2+ days). Showing the actual observations instead.")
     return {"chartable": chartable, "reason": reason, "series": by_supplier, "observations": obs,
             "comparable_count": len(usable), "days": sorted(dates)}

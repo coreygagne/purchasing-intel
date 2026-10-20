@@ -55,6 +55,7 @@ class Settings:
         "+internal purchasing research tool)"
     )
     search_timeout_s: float = 25.0
+    job_timeout_s: float = 300.0
     duplicate_window_hours: int = 12
     home_province: str = "ON"
 
@@ -85,6 +86,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         fetch_timeout_s=_float(env.get("FETCH_TIMEOUT_S"), 8.0),
         respect_robots_txt=_bool(env.get("RESPECT_ROBOTS_TXT"), True),
         search_timeout_s=_float(env.get("SEARCH_TIMEOUT_S"), 25.0),
+        job_timeout_s=_float(env.get("JOB_TIMEOUT_S"), 300.0),
         duplicate_window_hours=_int(env.get("DUPLICATE_WINDOW_HOURS"), 12),
         home_province=(env.get("HOME_PROVINCE") or "ON").upper(),
     )

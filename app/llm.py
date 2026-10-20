@@ -24,7 +24,7 @@ import anthropic
 
 from . import extract as ex
 from .config import Settings
-from .evidence import OfferBuilder, Source
+from .evidence import OfferBuilder, Source, is_seller_source
 
 log = logging.getLogger(__name__)
 
@@ -136,11 +136,40 @@ def source_text(s: Source) -> str:
     return " ".join(x for x in [s.title, s.snippet, s.page_text or s.raw_content or ""] if x)
 
 
-def quote_in_source(quote: str, s: Source | None) -> bool:
+MIN_QUOTE_CHARS = 20
+MIN_QUOTE_WORDS = 4
+
+
+def quote_in_source(quote: str, s: Source | None, *, min_chars: int = 4) -> bool:
     q = _squash(quote).strip(" .…\"'")
-    if s is None or len(q) < 4:
+    if s is None or len(q) < min_chars:
         return False
     return q in _squash(source_text(s))
+
+
+def substantial(quote: str) -> bool:
+    q = _squash(quote).strip(" .…\"'")
+    return len(q) >= MIN_QUOTE_CHARS and len(q.split()) >= MIN_QUOTE_WORDS
+
+
+def numbers_in(text: str) -> set[str]:
+    return set(re.findall(r"\d+(?:[.,]\d+)?", text or ""))
+
+
+def context_before(quote: str, s: Source, chars: int = 120) -> str | None:
+    """The verbatim source text: up to `chars` characters before the quote, plus the quote itself."""
+    norm = re.sub(r"\s+", " ", _squash_keep_case(source_text(s))).strip()
+    q = _squash(quote).strip(" .…\"'")
+    i = norm.lower().find(q)
+    if i < 0 or not q:
+        return None
+    start = max(0, i - chars)
+    return ("…" if start else "") + norm[start:i + len(q)]
+
+
+def _squash_keep_case(text: str) -> str:
+    text = (text or "").replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+    return text.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")
 
 
 class ClaudeAnalyst:
@@ -251,24 +280,42 @@ class ClaudeAnalyst:
             "quote copied exactly from the source."
         )
         data, usage = await self._call(user, EXTRACT_SCHEMA, 12000)
-        return self._verify(data, sources, builder, priced_sources) | {"_usage": usage}
+        tokens = list(getattr(identity, "model_tokens", []) or [])
+        return self._verify(data, sources, builder, priced_sources, tokens) | {"_usage": usage}
 
     def _verify(self, data: dict[str, Any], sources: list[Source], builder: OfferBuilder,
-                priced_sources: set[str]) -> dict[str, Any]:
+                priced_sources: set[str], tokens: list[str] | None = None) -> dict[str, Any]:
         by_id = {s.id: s for s in sources}
         kept = rejected = 0
+        rejections: list[str] = []
         for item in data.get("offers", []):
             src = by_id.get(item.get("source_id", ""))
             price_text = (item.get("price_text") or "").strip()
             quote = (item.get("evidence_quote") or "").strip()
-            ok = (src is not None and src.id not in priced_sources and price_text and quote
-                  and _squash(price_text) in _squash(quote) and quote_in_source(quote, src)
-                  and ex.parse_price_text(price_text) is not None)
-            if not ok:
+            reason = None
+            if src is None:
+                reason = "unknown source"
+            elif not is_seller_source(src):
+                reason = f"{src.id} is not a seller page ({src.type})"
+            elif src.id in priced_sources or src.id in builder.unclear_sources:
+                reason = f"{src.id} already has page-data pricing"
+            elif not price_text or not quote or _squash(price_text) not in _squash(quote):
+                reason = "price not inside its quote"
+            elif not quote_in_source(quote, src, min_chars=8):
+                reason = "quote not found in source text"
+            elif ex.parse_price_text(price_text) is None:
+                reason = "price text unreadable"
+            context = context_before(quote, src) if reason is None else None
+            if reason is None and context is None:
+                reason = "quote not found in source text"
+            if reason is None and tokens and ex.match_offer(tokens, context).level == "different":
+                reason = "requested model not named next to the price (may be another item on the page)"
+            if reason:
                 rejected += 1
+                rejections.append(reason)
                 continue
             kept += 1
-            builder.from_llm(src, item)
+            builder.from_llm(src, item, context)
         quality = data.get("quality") or {}
         points_kept = points_rejected = 0
         verified_quality: dict[str, Any] = {}
@@ -276,8 +323,12 @@ class ClaudeAnalyst:
             out = []
             for p in quality.get(kind, []) or []:
                 ids = [i for i in p.get("source_ids", []) if i in by_id]
-                quotes = [q for q in p.get("quotes", []) if any(quote_in_source(q, by_id[i]) for i in ids)]
-                if not ids or not quotes or not (p.get("point") or "").strip():
+                quotes = [q for q in p.get("quotes", [])
+                          if substantial(q) and any(quote_in_source(q, by_id[i]) for i in ids)]
+                point = (p.get("point") or "").strip()
+                # numbers/percentages in the summary must come from the quoted text
+                unsupported = numbers_in(point) - set().union(*(numbers_in(q) for q in quotes)) if quotes else True
+                if not ids or not quotes or not point or unsupported:
                     points_rejected += 1
                     continue
                 points_kept += 1
@@ -285,16 +336,21 @@ class ClaudeAnalyst:
                             "urls": [by_id[i].url for i in ids],
                             "source_types": sorted({by_id[i].type for i in ids})})
             verified_quality[kind] = out
-        verified_quality["overall_note"] = (quality.get("overall_note") or "").strip()
-        verified_quality["label"] = ("AI summary of the cited sources. Each point links to its sources; every quote "
-                                     "was checked word-for-word against the source text.")
+        note = (quality.get("overall_note") or "").strip()
+        # A free-text note may not introduce figures (ratings, counts, percentages) of its own
+        verified_quality["overall_note"] = note if note and not numbers_in(note) else ""
+        verified_quality["overall_note_label"] = "AI comment on the strength of the evidence (not a quote)"
+        verified_quality["label"] = ("AI summary of the cited sources. Each point links to its sources and keeps only "
+                                     "quotes found word-for-word in them; points with figures not in their quotes "
+                                     "are dropped.")
         alternatives = []
         for a in data.get("alternatives", []) or []:
             src = by_id.get(a.get("source_id", ""))
-            if src and a.get("name") and quote_in_source(a.get("quote", ""), src):
-                alternatives.append({"name": a["name"], "why": a.get("why_considered", ""), "source_id": src.id,
-                                     "url": src.url, "quote": a["quote"]})
+            name = (a.get("name") or "").strip()
+            quote = a.get("quote", "")
+            if src and name and substantial(quote) and quote_in_source(quote, src) and _squash(name) in _squash(quote):
+                alternatives.append({"name": name, "source_id": src.id, "url": src.url, "quote": quote})
         verification = {"offers_kept": kept, "offers_rejected": rejected, "points_kept": points_kept,
-                        "points_rejected": points_rejected}
+                        "points_rejected": points_rejected, "offer_rejection_reasons": rejections[:10]}
         verified_quality["verification"] = verification
         return {"quality": verified_quality, "alternatives": alternatives, "verification": verification}

@@ -65,7 +65,10 @@ async def test_verified_offer_kept_fabricated_rejected():
     a, msgs = analyst(payload)
     builder = OfferBuilder(["Acme"])
     out = await a.extract(IDENT, sources, builder)
-    assert out["verification"] == {"offers_kept": 1, "offers_rejected": 3, "points_kept": 0, "points_rejected": 0}
+    v = out["verification"]
+    assert (v["offers_kept"], v["offers_rejected"], v["points_kept"], v["points_rejected"]) == (1, 3, 0, 0)
+    assert set(v["offer_rejection_reasons"]) == {"quote not found in source text", "price not inside its quote",
+                                                  "unknown source"}
     [o] = builder.offers
     assert o.price == 312.5 and o.price_basis == "llm_verified" and o.source_id == "S1"
     # "CAD" isn't written in the quoted text, so the currency is inferred from the .ca seller, not trusted from the AI

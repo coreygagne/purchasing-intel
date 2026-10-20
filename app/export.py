@@ -7,8 +7,21 @@ import io
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+
+def safe_cell(value: Any) -> Any:
+    """Text from the web must never become a spreadsheet formula, or break the file."""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float, bool)):
+        return value
+    text = ILLEGAL_CHARACTERS_RE.sub("", str(value))
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        text = "'" + text
+    return text
 
 OFFER_COLUMNS: list[tuple[str, Any]] = [
     ("Offer", "id"),
@@ -54,12 +67,12 @@ def _val(o: dict[str, Any], key: Any) -> Any:
 
 
 def offers_csv(result: dict[str, Any]) -> str:
+    """Offers as CSV (prices are observations, not quotes; see the 'Observed at' column)."""
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow([f"# {result['query']} - researched {result['researched_at']} UTC - prices as observed; not quotes"])
     w.writerow([c for c, _ in OFFER_COLUMNS])
     for o in result["offers"]:
-        w.writerow(["" if _val(o, k) is None else _val(o, k) for _, k in OFFER_COLUMNS])
+        w.writerow([safe_cell(_val(o, k)) for _, k in OFFER_COLUMNS])
     return buf.getvalue()
 
 
@@ -71,7 +84,7 @@ def _sheet(wb: Workbook, title: str, header: list[str], rows: list[list[Any]], w
         cell.fill = PatternFill("solid", fgColor="1F3A5F")
         cell.alignment = Alignment(vertical="top", wrap_text=True)
     for r in rows:
-        ws.append(["" if v is None else v for v in r])
+        ws.append([safe_cell(v) for v in r])
     for i in range(1, len(header) + 1):
         ws.column_dimensions[get_column_letter(i)].width = (widths or {}).get(i, 18)
     ws.freeze_panes = "A2"
@@ -121,7 +134,7 @@ def comparison_xlsx(comparison: dict[str, Any], history: list[dict[str, Any]]) -
                                 "'Calculated' values are arithmetic on observed prices; 'estimated' values use the "
                                 "stated assumptions."])
     for row in lines:
-        ws.append(row)
+        ws.append([safe_cell(v) for v in row])
     ws.column_dimensions["A"].width = 30
     ws.column_dimensions["B"].width = 120
     for row in ws.iter_rows():

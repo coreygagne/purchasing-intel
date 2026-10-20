@@ -38,6 +38,14 @@ GENERIC_WORDS = {
     "box", "case", "set", "kit", "for", "with", "and", "high", "low", "large", "small", "medium", "outdoor",
     "indoor", "portable", "electric", "cordless", "steel", "stainless", "plastic", "rubber", "safety", "black",
     "white", "red", "blue", "yellow", "green", "grade", "pro", "professional", "premium", "standard", "buy",
+    # common product words that are not brands
+    "impact", "wrench", "drill", "driver", "saw", "grinder", "battery", "charger", "gloves", "glove", "cord",
+    "extension", "cable", "hose", "pump", "motor", "filter", "bearing", "belt", "valve", "fitting", "light", "lamp",
+    "heater", "fan", "ladder", "respirator", "mask", "boots", "jacket", "helmet", "vest", "oil", "grease",
+    "lubricant", "paint", "tape", "bolt", "nut", "screw", "washer", "chain", "rope", "sling", "shackle", "hook",
+    "hoist", "tarp", "bucket", "cleaner", "degreaser", "sealant", "adhesive", "welding", "welder", "generator",
+    "compressor", "sensor", "switch", "breaker", "relay", "fuse", "wire", "tire", "wheel", "socket", "ratchet",
+    "pliers", "hammer", "knife", "blade", "bit", "bits", "replacement", "part", "parts", "kit", "nitrile",
 }
 
 DEPTHS = {
@@ -103,14 +111,30 @@ class Identity:
 
 
 def _brand_words(text: str, extra: list[str] | None = None) -> list[str]:
-    words = []
+    """Brand names used to recognise manufacturer websites.
+
+    The first word only counts as a brand when the request also has a model number
+    ("Milwaukee 2767-20"); in a plain description ("nitrile gloves") it is just a word.
+    Brands from page data or the AI planner (checked against the request) are always used.
+    """
+    words: list[str] = []
     first = re.findall(r"[A-Za-z][A-Za-z&'\-]{2,}", text)
-    if first and first[0].lower() not in GENERIC_WORDS:
+    if first and first[0].lower() not in GENERIC_WORDS and ex.model_tokens(text):
         words.append(first[0])
     for w in extra or []:
         if w and w.lower() not in (x.lower() for x in words):
             words.append(w)
     return words
+
+
+def _clean_title(name: str, tokens_hint: str = "") -> str:
+    """Drop a trailing " | Store name" / " - Store name" segment without cutting model numbers."""
+    parts = [p.strip() for p in re.split(r"\s+[|–—]\s+|\s+-\s+", name) if p.strip()]
+    if len(parts) <= 1:
+        return name.strip()
+    if not ex.model_tokens(parts[-1]) and len(parts[-1]) <= 40:
+        parts = parts[:-1]  # trailing store / site name
+    return " ".join(parts).strip()
 
 
 def plan_queries(name: str, depth: str, extra: list[str] | None = None) -> list[PlannedQuery]:
@@ -269,9 +293,11 @@ class ResearchEngine:
                 try:
                     text = await providers.tavily.extract(url)
                     if text:
-                        first = next((ln.strip(" #*") for ln in text.splitlines() if len(ln.strip()) > 10), None)
-                        if first:
-                            name, source = first[:150], "page text via Tavily Extract"
+                        # Use the page's main heading only; other lines are usually navigation
+                        heading = next((ln.lstrip("#").strip() for ln in text.splitlines()
+                                        if re.match(r"^#{1,2}\s+\S", ln.strip())), None)
+                        if heading and len(heading) > 5:
+                            name, source = heading[:150], "page heading via Tavily Extract"
                 except ProviderError as exc:
                     notes.append(f"Tavily Extract also failed: {exc.user_message}")
         if not name:
@@ -279,7 +305,7 @@ class ResearchEngine:
             notes.append("Product identified only from the URL text - results may be imprecise.")
         if brand and brand.lower() not in name.lower():
             name = f"{brand} {name}"
-        name = re.sub(r"\s*[|\-–]\s*[^|\-–]{2,40}$", "", name).strip() if " | " in name else name.strip()
+        name = _clean_title(name)
         tokens = ex.model_tokens(name)
         if mpn and mpn.lower() not in (t.lower() for t in tokens) and ex.model_tokens(mpn):
             tokens.append(mpn)
@@ -367,11 +393,12 @@ def dedupe_snippet_offers(offers: list[Offer], structured_source_ids: set[str]) 
     """
     structured = {(o.source_id, round(o.price, 2)) for o in offers
                   if o.price_basis == "structured_data" and o.price is not None}
+    unclear = {o.source_id for o in offers if o.price_basis == "structured_data" and o.price_type == "unclear"}
     keep = []
     for o in offers:
         if o.price_basis in ("snippet", "none") and o.source_id in structured_source_ids:
-            if o.price is None or (o.source_id, round(o.price, 2)) in structured:
-                continue
+            if o.price is None or (o.source_id, round(o.price, 2)) in structured or o.source_id in unclear:
+                continue  # repeats page data, or the page shows several prices so a snippet price is ambiguous
         keep.append(o)
     offers[:] = keep
     for i, o in enumerate(offers, start=1):

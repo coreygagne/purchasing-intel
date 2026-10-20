@@ -25,6 +25,9 @@ BANNER = ('<div style="background:#a63a2a;color:#fff;padding:6px 16px;font:600 1
 
 
 def build(unconfigured: bool = False):
+    from app import fetch
+    from tests.conftest import fake_resolve
+    fetch.resolve_host = fake_resolve  # simulated hosts aren't in real DNS
     db = Path(tempfile.mkdtemp()) / "ui-test.db"
     settings = Settings(tavily_api_key=None if unconfigured else "tvly-test-key",
                         serpapi_api_key=None if unconfigured else "serp-test", database_path=db)

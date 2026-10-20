@@ -26,6 +26,12 @@ _UNIT_SUFFIX = (
     r"mpa|kpa|t|ton|tons|qt|pt|sqft|cu|cuft|lm|db|ohm|mph)"
 )
 _UNIT_TOKEN_RE = re.compile(rf"^\d+(?:[.,]\d+)?{_UNIT_SUFFIX}$", re.I)
+_SPEC_AFTER_RE = re.compile(
+    r"\s*-?\s*(?:watts?|w|volts?|v|amps?|a|ft[- .]?lbs?|ft|feet|foot|inch(?:es)?|in\b|\"|mm|cm|lbs?|pounds?|kg|"
+    r"gauge|ga|awg|gallons?|gal|psi|btu|rpm|cfm|gpm|hp|mah|ah|ml|litres?|liters?|l\b|oz|count|ct|pack|pk|pcs?|"
+    r"pieces?|sq|cu|lumens?|lm|degrees?|°|series|grit|mil|tpi|lb)\b",
+    re.I,
+)
 _DIM_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?[a-z]*$", re.I)
 
 
@@ -47,10 +53,12 @@ def model_tokens(text: str) -> list[str]:
     tokens (M18, N95) are not treated as model identifiers.
     """
     found: list[str] = []
-    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9\-./]*[A-Za-z0-9]", text):
-        tok = tok.strip(".-/")
+    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9\-./]*[A-Za-z0-9]", text):
+        tok = m.group(0).strip(".-/")
         if "/" in tok or len(tok) < 4:
             continue
+        if tok.isdigit() and _SPEC_AFTER_RE.match(text[m.end():]):
+            continue  # "1500 watt", "1000 ft-lb": a spec value, not a model number
         if re.fullmatch(r"(?:19|20)\d\d", tok):  # a year
             continue
         digits = sum(ch.isdigit() for ch in tok)
@@ -93,11 +101,38 @@ class MatchResult:
     notes: list[str] = field(default_factory=list)
 
 
-COMPAT_RE = re.compile(
-    r"\b(compatible(?: with)?|replacement for|replaces|fits|for use with|aftermarket|generic|knock[- ]?off|"
-    r"replica|equivalent to|alternative to|substitute for|non[- ]oem)\b",
+COMPAT_RE = re.compile(r"\b(aftermarket|knock[- ]?off|replica|non[- ]oem|generic replacement)\b", re.I)
+# A phrase that points at the requested model: "replacement for (Milwaukee) 2767-20", "fits DCF887B"
+COMPAT_BEFORE_RE = re.compile(
+    r"\b(compatible with|replacement for|replaces|replace|fits|for use with|for|equivalent to|alternative to|"
+    r"substitute for|works with)\s+(?:[a-z0-9&'.\-]+\s+){0,2}$",
     re.I,
 )
+
+
+# "...2767-20 compatible", "TX4400-replacement"
+COMPAT_AFTER_RE = re.compile(r"\s*-?\s*(compatible|replacement|equivalent)\b", re.I)
+
+
+def _token_regex(tok: str) -> re.Pattern[str]:
+    parts = [p for p in re.split(r"[^a-z0-9]+", tok.lower()) if p]
+    return re.compile(r"(?<![a-z0-9])" + r"[\s\-_./]?".join(re.escape(p) for p in parts) + r"(?![a-z0-9])", re.I)
+
+
+def _compat_phrase(tokens: list[str], text: str) -> str | None:
+    strong = COMPAT_RE.search(text)
+    if strong:
+        return strong.group(0)
+    low = text.lower()
+    for tok in tokens:
+        for m in _token_regex(tok).finditer(low):
+            c = COMPAT_BEFORE_RE.search(low[max(0, m.start() - 60): m.start()])
+            if c:
+                return c.group(1) + " " + tok
+            after = COMPAT_AFTER_RE.match(low[m.end(): m.end() + 30])
+            if after:
+                return f"{tok} {after.group(1)}"
+    return None
 
 
 def _norm_text(text: str) -> str:
@@ -120,7 +155,6 @@ def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
     if not target_tokens:
         return MatchResult("unverified", ["No model number in the request - equivalence must be checked against specs."])
     text = _norm_text(offer_text)
-    squashed = re.sub(r"\s+", "", text)
     exact, variants, missing = [], [], []
     for tok in target_tokens:
         base, suffix = _split_model(tok)
@@ -143,15 +177,12 @@ def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
             if suffix is not None and re.search(rf"\s{re.escape(base)}\s", text):
                 variants.append(f"Base model {base.upper()} found but suffix '{suffix.upper()}' not confirmed")
                 continue
-        if len(full) >= 6 and full in squashed:
-            exact.append(tok)
-            continue
         missing.append(tok)
     if exact and not variants and not missing:
-        compat = COMPAT_RE.search(offer_text)
+        compat = _compat_phrase(exact, offer_text)
         if compat:
-            return MatchResult("compatible", [f"Listing mentions the model but says '{compat.group(0)}' - likely a "
-                                              "compatible/aftermarket item, not the original."])
+            return MatchResult("compatible", [f"Listing mentions the model but says '{compat}' - likely a "
+                                              "compatible/aftermarket item or accessory, not the original."])
         return MatchResult("exact", [f"Model {', '.join(exact)} appears in the listing."])
     if variants:
         return MatchResult("variant", variants + ([f"Not found: {', '.join(missing)}"] if missing else []))
@@ -162,7 +193,8 @@ def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
 
 CONDITION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("refurbished", re.compile(r"\b(refurbished|renewed|reconditioned|remanufactured|recertified|factory[- ]reconditioned)\b", re.I)),
-    ("used", re.compile(r"\b(used|pre[- ]owned|second[- ]hand|for parts)\b", re.I)),
+    ("used", re.compile(r"(^\s*used\b|\bused\s*$|[(\[]\s*used\s*[)\]]|\bused\s*[-–:|]|\bused (?:condition|item|unit)\b|"
+                        r"\bcondition:?\s*used\b|\bpre[- ]owned\b|\bsecond[- ]hand\b|\bfor parts\b)", re.I)),
     ("open box", re.compile(r"\bopen[- ]box\b", re.I)),
 ]
 
@@ -200,7 +232,9 @@ _CURRENCY_PREFIX = {
 }
 _SUFFIX_CODES = {"CAD", "USD", "EUR", "GBP", "CNY", "RMB", "AUD", "MXN", "JPY"}
 
-_AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?"
+# 1.299,99 (European) | 1,299.99 | 12,99 (decimal comma) | 349.99
+_AMOUNT = (r"\d{1,3}(?:\.\d{3})+,\d{1,2}(?!\d)|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+,\d{1,2}(?![\d,])|"
+           r"\d+(?:\.\d{1,2})?")
 PRICE_RE = re.compile(
     r"(?P<prefix>CA\$|C\$|CDN\$|CAD\s?\$|US\$|USD\s?\$|AU\$|A\$|NZ\$|HK\$|S\$|MX\$|\$|€|£|¥|"
     r"\b(?:CAD|USD|EUR|GBP|CNY|RMB|MXN)\s)"
@@ -235,10 +269,23 @@ class PriceMatch:
 
 
 def _to_float(s: str) -> float | None:
+    """Parse 1,299.99 / 1.299,99 / 12,99 / 349.99. Returns None if the format is ambiguous."""
+    s = (s or "").strip().replace(" ", "").replace("\u00a0", "")
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d{1,2}", s):        # 1.299,99
+        s = s.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", s):       # 1,299.99
+        s = s.replace(",", "")
+    elif re.fullmatch(r"\d+,\d{1,2}", s):                          # 12,99
+        s = s.replace(",", ".")
+    elif not re.fullmatch(r"\d+(?:\.\d+)?", s):
+        return None
     try:
-        return float(s.replace(",", ""))
+        return float(s)
     except ValueError:
         return None
+
+
+_CONTINUES_RE = re.compile(r"^[.,]?\d")
 
 
 def find_prices(text: str) -> list[PriceMatch]:
@@ -252,6 +299,8 @@ def find_prices(text: str) -> list[PriceMatch]:
         after = text[m.end(): m.end() + 25]
         if _NOISE_BEFORE.search(before) or _NOISE_AFTER.match(after):
             continue
+        if _CONTINUES_RE.match(text[m.end("amount"):]):
+            continue  # number continues in a format we can't read reliably - don't guess
         amount = _to_float(m.group("amount"))
         if amount is None or amount <= 0:
             continue
@@ -308,7 +357,7 @@ def quote_required(text: str) -> str | None:
 
 PACK_PATTERNS = [
     re.compile(r"\b(?:pack|box|case|bag|carton|bundle|set|lot|pail|tub|roll)\s+of\s+(\d{1,5})\b", re.I),
-    re.compile(r"\b(\d{1,5})\s?(?:-|\s)?(?:pack|pk|pkg|pcs|pieces|count|ct|units|per box|per case|/box|/case|/pk|/pack|/bag)\b", re.I),
+    re.compile(r"\b(\d{1,5})\s?(?:-|\s)?(?:pack|pk|pkg|pcs|pieces|count|ct|per box|per case|/box|/case|/pk|/pack|/bag)\b", re.I),
     re.compile(r"\((\d{1,5})\s?(?:pk|pack|pcs|ct|count)\)", re.I),
     re.compile(r"\bqty[:\s]+(\d{1,5})\b", re.I),
 ]
@@ -485,6 +534,9 @@ class StructuredOffer:
     seller: str | None
     url: str | None
     raw_price: str
+    aggregate: bool = False  # schema.org AggregateOffer: a "from" price across several sellers/variants
+    sku: str | None = None
+    name: str | None = None
 
 
 @dataclass
@@ -518,7 +570,8 @@ def _parse_offer(o: dict[str, Any]) -> StructuredOffer | None:
         price_raw = spec.get("price")
     currency = o.get("priceCurrency") or (spec.get("priceCurrency") if isinstance(spec, dict) else None)
     low = high = None
-    if "AggregateOffer" in types or ("lowPrice" in o and price_raw in (None, "")):
+    aggregate = "AggregateOffer" in types or ("lowPrice" in o and price_raw in (None, ""))
+    if aggregate:
         low = _to_float(str(o.get("lowPrice"))) if o.get("lowPrice") not in (None, "") else None
         high = _to_float(str(o.get("highPrice"))) if o.get("highPrice") not in (None, "") else None
         if high is not None and low is not None and high <= low:
@@ -542,6 +595,9 @@ def _parse_offer(o: dict[str, Any]) -> StructuredOffer | None:
         seller=_name(o.get("seller")),
         url=o.get("url") if isinstance(o.get("url"), str) else None,
         raw_price=raw,
+        aggregate=aggregate,
+        sku=str(o.get("sku")) if o.get("sku") else None,
+        name=o.get("name") if isinstance(o.get("name"), str) else None,
     )
 
 

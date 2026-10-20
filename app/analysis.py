@@ -13,7 +13,7 @@ from collections import defaultdict
 from typing import Any
 
 from . import extract as ex
-from .evidence import Offer, Source
+from .evidence import Offer, Source, canonical_url
 from .fx import FxRate
 from .import_costs import delivered_estimate
 from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES, DISTRIBUTOR, FORUM, GOVERNMENT,
@@ -21,6 +21,8 @@ from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES,
 
 SUPPLIER_TYPE_POINTS = {DISTRIBUTOR: 15, MANUFACTURER: 15, RETAILER: 12, MARKETPLACE: 5, B2B_MARKETPLACE: 3,
                         CLASSIFIEDS: 0, UNKNOWN: 2}
+PRICE_LABEL = {"structured_data": "the page's own price data", "shopping_api": "the Google Shopping listing",
+               "llm_verified": "verified page text"}
 EVIDENCE_POINTS = {"structured_data": 10, "shopping_api": 8, "llm_verified": 7, "snippet": 2}
 
 
@@ -53,7 +55,7 @@ def apply_costs(offers: list[Offer], fx: dict[str, FxRate], assumptions: dict[st
 def _offer_dict(o: Offer) -> dict[str, Any]:
     return {"price_cad": o.price_cad, "currency": o.currency, "country": o.country, "pack_qty": o.pack_qty,
             "unit_price_cad": o.unit_price_cad, "shipping_cost": o.shipping_cost, "shipping_text": o.shipping_text,
-            "fx_rate": o.fx_rate}
+            "shipping_scope": o.shipping_scope, "fx_rate": o.fx_rate}
 
 
 # ----------------------------------------------------------- comparability
@@ -82,6 +84,12 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append(f"no exchange rate available for {o.currency}")
         if o.superseded():
             reasons.append("superseded by a more reliable price for the same listing")
+        if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued")):
+            reasons.append(f"not available to buy ({o.availability})")
+        if quantity and o.moq:
+            nums = [int(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", o.moq)]
+            if nums and nums[0] > quantity:
+                reasons.append(f"minimum order ({o.moq}) exceeds the {quantity} units you need")
         o.exclusion_reasons = reasons
         o.comparable = not reasons
         # informational flags
@@ -96,12 +104,6 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             o.flags.append("Marketplace: the actual seller may be a third party - check seller ratings and return policy.")
         if o.supplier_type == UNKNOWN and not o.supplier_in_directory:
             o.flags.append("Supplier not in the built-in directory - verify the business before ordering.")
-        if quantity and o.moq:
-            nums = [int(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", o.moq)]
-            if nums and nums[0] > quantity:
-                o.flags.append(f"Minimum order ({o.moq}) exceeds the {quantity} units you need.")
-        if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued")):
-            o.flags.append(f"Availability: {o.availability}.")
         if not tokens and o.comparable:
             o.flags.append("Equivalence not verified (no model number) - compare specs before choosing.")
 
@@ -112,23 +114,27 @@ def detect_conflicts(offers: list[Offer]) -> list[dict[str, Any]]:
     by_key: dict[str, list[Offer]] = defaultdict(list)
     for o in offers:
         if o.price is not None:
-            by_key[o.url.split("?")[0].rstrip("/")].append(o)
+            by_key[canonical_url(o.url)].append(o)
     conflicts = []
     for url, group in by_key.items():
         prices = {(round(o.price, 2), o.currency) for o in group if o.price is not None}
         if len(group) < 2:
             continue
         best = max(group, key=lambda o: (rank.get(o.price_basis, 0), o.observed_at))
+        superseded = False
         for o in group:
-            if o is not best and o.price_basis in ("snippet",) and best.price_basis != "snippet":
-                o.notes.append(f"Superseded by {best.price_label or best.price_basis} for the same page.")
+            if o is not best and o.price_basis == "snippet" and best.price_basis != "snippet":
+                o.notes.append(f"Superseded by {PRICE_LABEL.get(best.price_basis, best.price_basis)} for the same page.")
+                superseded = True
         if len(prices) > 1:
             detail = "; ".join(f"{fmt_money(o.price, o.currency)} ({o.price_basis.replace('_', ' ')})" for o in group)
+            outcome = (f"The page's own data ({fmt_money(best.price, best.currency)}) is used; the search-snippet "
+                       "price is shown for reference only." if superseded else
+                       "Both are shown; neither is preferred automatically.")
             conflicts.append({"type": "price_disagreement", "url": url, "supplier": best.supplier,
                               "offer_ids": [o.id for o in group],
-                              "text": f"Sources disagree on the price at {best.supplier}: {detail}. "
-                                      f"Using {fmt_money(best.price, best.currency)} from the most reliable source; "
-                                      "confirm before ordering."})
+                              "text": f"Sources disagree on the price at {best.supplier}: {detail}. {outcome} "
+                                      "Confirm before ordering."})
             for o in group:
                 o.flags.append("conflict: sources disagree on this listing's price")
     # Same supplier, different listings/sources, different prices (informational)
@@ -137,7 +143,7 @@ def detect_conflicts(offers: list[Offer]) -> list[dict[str, Any]]:
         if o.price is not None and o.price_type == "listed" and o.match_level == "exact" and not o.superseded():
             by_supplier[re.sub(r"[^a-z0-9]", "", o.supplier.lower())].append(o)
     for group in by_supplier.values():
-        urls = {o.url.split("?")[0].rstrip("/") for o in group}
+        urls = {canonical_url(o.url) for o in group}
         prices = {(round(o.price, 2), o.currency) for o in group}
         if len(urls) > 1 and len(prices) > 1:
             detail = "; ".join(f"{fmt_money(o.price, o.currency)} ({o.price_basis.replace('_', ' ')})" for o in group)
@@ -178,13 +184,15 @@ def _cmp_value(o: Offer) -> float | None:
 
 
 def _comparison_basis(pool: list[Offer]) -> tuple[str, list[Offer], list[Offer]]:
-    """Use unit price when pack sizes differ; listing price when they are all the same."""
+    """Listing price when pack sizes agree; otherwise price per unit, counting listings that state no
+    pack size as single units (flagged). Nothing is dropped from the ranking."""
     qtys = {o.pack_qty for o in pool}
     if len(qtys) <= 1:
         return "listing price (CAD)", pool, []
-    known = [o for o in pool if o.pack_qty]
     unknown = [o for o in pool if not o.pack_qty]
-    return "price per unit (CAD, calculated from stated pack size)", known, unknown
+    for o in unknown:
+        o.flags.append("Pack size not stated in the title - counted as a single unit in the per-unit comparison.")
+    return "price per unit (CAD; listings without a stated pack size counted as single units)", pool, unknown
 
 
 def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
@@ -205,10 +213,8 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
 
     basis, ranked_pool, unknown_pack = _comparison_basis(pool)
     if unknown_pack:
-        notes.append(f"{len(unknown_pack)} comparable listing(s) don't state a pack size, so they can't be compared "
-                     "per unit and were left out of the price ranking.")
-    if not ranked_pool:
-        ranked_pool, basis = pool, "listing price (CAD)"
+        notes.append(f"Pack sizes differ: {len(unknown_pack)} listing(s) don't state one and were counted as single "
+                     "units. Check pack contents before relying on the per-unit ranking.")
     strong = [o for o in ranked_pool if o.confidence in ("high", "medium")]
     lowest_pool = strong or ranked_pool
     lowest = min(lowest_pool, key=lambda o: _cmp_value(o) or float("inf"))
@@ -235,6 +241,8 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
         if med > lv:
             lowest_expl.append(f"{(med - lv) / med * 100:.0f}% below the median of the {len(vals)} comparable observed "
                                f"prices (calculated; median CAD {med:,.2f}).")
+    if lowest in unknown_pack:
+        lowest_expl.append("This listing doesn't state a pack size; it was counted as one unit.")
     if lowest.country != "CA":
         lowest_expl.append("Seller appears to be outside Canada - landed cost may be higher than the listed price.")
     if lowest.delivered and not lowest.delivered["complete"]:

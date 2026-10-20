@@ -87,6 +87,8 @@ async def test_serpapi_shopping_parse_and_errors():
     assert e.value.kind == "quota"
 
 
+@pytest.mark.skipif(not __import__("os").environ.get("PI_NETWORK_TESTS"),
+                    reason="makes a real outbound call; set PI_NETWORK_TESTS=1 to run")
 async def test_proxy_refusal_is_reported_as_network(monkeypatch):
     """Real HTTP stack, real (unreachable/blocked) host: must fail cleanly, never fabricate results."""
     p = TavilyProvider("tvly-invalid", httpx.AsyncClient(timeout=10))
