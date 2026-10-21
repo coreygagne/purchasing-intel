@@ -123,15 +123,33 @@ Settings live in a file named **.env** in the app folder. It's created when you 
 | Get better results at about 5x the cost | `PI_ANTHROPIC_MODEL=claude-sonnet-5-5` |
 | Get the best results at about 10x the cost | `PI_ANTHROPIC_MODEL=claude-opus-5-5` |
 
-## Cutting costs further later: a free Tavily key
+## Optional extra keys (both have free plans)
 
-Tavily is a search service with a free plan (1,000 credits a month, no card needed; about 160 standard
-researches). With a Tavily key, searches no longer cost Anthropic money, and the AI reading on Haiku costs
-very little.
+- **Tavily** makes searching cost almost nothing: its free plan gives 1,000 credits a month (about 160
+  standard researches). Sign up at https://app.tavily.com and copy the key; it starts with `tvly-`.
+- **SerpApi** adds Google Shopping (Canada) prices from real stores: its free plan gives 250 searches a
+  month, and each research uses one. Sign up at https://serpapi.com and copy the key from
+  https://serpapi.com/manage-api-key.
 
-1. Sign up at https://app.tavily.com and copy your key (it starts with `tvly-`).
-2. In the app, open **Data sources**, then **Add or change API keys**, paste it in the Tavily box and click
-   **Save**.
+To add either one: in the app, open **Data sources**, then **Add or change API keys**, paste it in the
+right box and click **Save**. The badge at the top right then lists it, for example
+**Ready: Tavily + Google Shopping + AI reading**.
+
+## Updating to a new version
+
+Your key and saved research stay on your computer, so bring them across when you update:
+
+1. Close the Terminal (or black) window to stop the app.
+2. Rename your current folder to **purchasing-intel-old**.
+3. Download the new version from https://github.com/coreygagne/purchasing-intel (**Code**, then
+   **Download ZIP**), unzip it, and move the new **purchasing-intel-main** folder where the old one was.
+4. Copy two things from the old folder into the new one:
+   - **Mac:** in the old folder press **Command-Shift-.** to show hidden files.
+   - Drag the **.env** file and the **data** folder into the new folder.
+5. Start the app from the new folder.
+   - The first start takes a minute or two again.
+   - On a Mac you may need **Open Anyway** again (step 4 above).
+6. Check that your saved comparisons are there, then delete the old folder.
 
 ## If something goes wrong
 
@@ -148,3 +166,6 @@ very little.
   `PI_MONTHLY_BUDGET_USD` (see "Changing a setting").
 - **Results look thin:** try **Standard** depth. If that's still thin, switch to the Sonnet model (see
   "Changing a setting").
+- **A price looks far too low:** open the listing. It's often a different size, a per-foot price or a
+  page that lists several sizes. The app sets such prices aside from its recommendations and says why, but
+  always check the size on the page before ordering.

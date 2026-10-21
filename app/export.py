@@ -44,6 +44,13 @@ OFFER_COLUMNS: list[tuple[str, Any]] = [
     ("FX rate to CAD", "fx_rate"),
     ("FX date", "fx_date"),
     ("Unit price CAD (calculated)", "unit_price_cad"),
+    ("Priced per (length)", lambda o: ((f"{o['per_length_qty']:g} " if (o.get("per_length_qty") or 1) != 1 else "")
+                                       + o["per_length"]) if o.get("per_length") else None),
+    ("CAD per foot (calculated)", "per_ft_cad"),
+    ("CAD for requested length (calculated)", "order_total_cad"),
+    ("Requested specs stated", lambda o: ", ".join(o.get("spec_confirmed") or [])),
+    ("Requested specs not stated", lambda o: ", ".join(o.get("spec_missing") or [])),
+    ("Spec differences", lambda o: "; ".join(o.get("spec_conflicts") or [])),
     ("Delivered/landed CAD", lambda o: (o.get("delivered") or {}).get("value")),
     ("Delivered basis", lambda o: (o.get("delivered") or {}).get("label")),
     ("Delivered: missing", lambda o: ", ".join((o.get("delivered") or {}).get("missing") or [])),
@@ -60,6 +67,11 @@ OFFER_COLUMNS: list[tuple[str, Any]] = [
     ("Observed at (UTC)", "observed_at"),
     ("Source", "source_id"),
 ]
+
+
+def _col(name: str) -> int:
+    """1-based position of an Offers column (for widths)."""
+    return [c for c, _ in OFFER_COLUMNS].index(name) + 1
 
 
 def _val(o: dict[str, Any], key: Any) -> Any:
@@ -144,7 +156,9 @@ def comparison_xlsx(comparison: dict[str, Any], history: list[dict[str, Any]]) -
             row[0].font = Font(bold=True)
 
     _sheet(wb, "Offers", [c for c, _ in OFFER_COLUMNS],
-           [[_val(o, k) for _, k in OFFER_COLUMNS] for o in result["offers"]], {2: 28, 5: 50, 14: 50, 33: 60})
+           [[_val(o, k) for _, k in OFFER_COLUMNS] for o in result["offers"]],
+           {_col(name): w for name, w in (("Supplier", 28), ("Product (as listed)", 50), ("Evidence text", 50),
+                                          ("Flags", 60))})
     _sheet(wb, "Sources", ["ID", "Title", "Type", "Name", "Country", "Domain", "URL", "Found by", "Retrieved (UTC)",
                            "Page read", "Page read note"],
            [[s["id"], s["title"], s["type"], s["name"], s["country"], s["domain"], s["url"],

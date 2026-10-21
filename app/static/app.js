@@ -56,6 +56,13 @@ function ago(iso) {
   if (s < 86400 * 2) return `${Math.round(s / 3600)} hours ago`;
   return `${Math.round(s / 86400)} days ago`;
 }
+// "/ ft", "/ m", "/ 1,000 ft" for prices quoted per length; "/M?" when the unit is unclear
+function perText(o) {
+  if (!o || !o.per_length) return "";
+  if (o.per_length === "?") return " / M (unit unclear)";
+  const q = Number(o.per_length_qty || 1);
+  return ` / ${q !== 1 ? `${q.toLocaleString("en-CA")} ` : ""}${o.per_length}`;
+}
 function money(v, cur) {
   if (v === null || v === undefined) return "n/a";
   const n = Number(v).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: v < 1 ? 4 : 2 });
@@ -128,24 +135,27 @@ function keyForm() {
   const msg = h("span", { class: "msg", role: "status" });
   const ak = h("input", { type: "password", id: "key-anthropic", autocomplete: "off", spellcheck: "false", placeholder: "sk-ant-..." });
   const tk = h("input", { type: "password", id: "key-tavily", autocomplete: "off", spellcheck: "false", placeholder: "tvly-... (optional)" });
+  const sk = h("input", { type: "password", id: "key-serpapi", autocomplete: "off", spellcheck: "false", placeholder: "optional" });
   const btn = h("button", { class: "btn primary", type: "submit" }, "Save");
   const say = (text, err = false) => { msg.className = err ? "msg err" : "msg"; msg.textContent = text; };
   return h("form", { class: "keyform", onsubmit: async (e) => {
     e.preventDefault();
-    const body = { anthropic_api_key: ak.value.trim() || null, tavily_api_key: tk.value.trim() || null };
-    if (!body.anthropic_api_key && !body.tavily_api_key) { say("Paste a key first.", true); return; }
+    const body = { anthropic_api_key: ak.value.trim() || null, tavily_api_key: tk.value.trim() || null,
+      serpapi_api_key: sk.value.trim() || null };
+    if (!body.anthropic_api_key && !body.tavily_api_key && !body.serpapi_api_key) { say("Paste a key first.", true); return; }
     btn.disabled = true;
     say(body.anthropic_api_key ? "Checking the key with Anthropic..." : "Saving...");
     const r = await api("/api/setup/keys", { method: "POST", body: JSON.stringify(body) });
     btn.disabled = false;
     if (!r.ok) { say(typeof r.body?.detail === "string" ? r.body.detail : "Couldn't save the key.", true); return; }
-    ak.value = ""; tk.value = "";
+    ak.value = ""; tk.value = ""; sk.value = "";
     say("Saved on this computer.");
     await loadStatus();
     if (state.status?.ready) { flash(null); renderHome(); }
   } },
     h("label", {}, "Anthropic API key", ak),
     h("label", {}, "Tavily API key (optional, free plan)", tk),
+    h("label", {}, "SerpApi key (optional: Google Shopping Canada prices, free plan)", sk),
     h("div", { class: "row" }, btn, msg));
 }
 function spendText() {
@@ -361,9 +371,13 @@ function recCard(kind, rec, res, offersById) {
   const foreign = rec.currency !== "CAD";
   return h("section", { class: `rec ${isValue ? "value" : ""}` },
     h("div", { class: "kind" }, title),
-    h("div", { class: "price num" }, money(rec.price, rec.currency), " ", priceMark(o),
+    h("div", { class: "price num" }, money(rec.price, rec.currency), perText(o) ? h("small", {}, perText(o)) : null, " ", priceMark(o),
       foreign && rec.price_cad != null ? h("small", {}, ` ≈ CAD ${Number(rec.price_cad).toFixed(2)} `, mark("calculated")) : null),
-    o.pack_qty ? h("div", { class: "small muted" }, `${o.pack_text}: ${money(o.unit_price_cad, "CAD")} per unit `, mark("calculated")) : null,
+    o.pack_qty && o.unit_price_cad != null ? h("div", { class: "small muted" }, `${o.pack_text}: ${money(o.unit_price_cad, "CAD")} per unit `, mark("calculated")) : null,
+    rec.per_ft_cad != null && (o.per_length !== "ft" || o.per_length_qty !== 1 || foreign)
+      ? h("div", { class: "small muted" }, `${money(rec.per_ft_cad, "CAD")} per foot `, mark("calculated")) : null,
+    rec.order_total_cad != null ? h("div", { class: "small" }, `For ${rec.order_length}: about `,
+      h("b", {}, money(rec.order_total_cad, "CAD")), " ", mark("calculated"), " before tax and shipping") : null,
     h("div", { class: "who" }, rec.supplier, " ", h("span", { class: "sub" }, `${o.supplier_type || ""}, ${country(o.country)}`)),
     h("div", { class: "small" }, link(rec.url, "Open listing"), ` (observed ${when(o.observed_at)})`),
     h("ul", { class: "why" }, rec.explanation.map((e) => h("li", {}, e))),
@@ -429,10 +443,13 @@ function offerRow(o, res, colCount) {
       o.condition && o.condition !== "new" ? [" ", h("span", { class: "badge warn" }, o.condition)] : null,
       o.is_reference ? [" ", h("span", { class: "badge" }, "Your link")] : null)),
     td({ class: "r", "data-label": "Advertised price" }, h("div", { class: "price-cell" },
-      o.price != null ? h("span", { class: "v num" }, money(o.price, o.currency) + (o.price_high ? `–${Number(o.price_high).toFixed(2)}` : "")) :
+      o.price != null ? h("span", { class: "v num" }, money(o.price, o.currency) + (o.price_high ? `–${Number(o.price_high).toFixed(2)}` : "") + perText(o)) :
         h("span", { class: "muted" }, o.price_type === "unclear" ? "unclear" : "not published"),
       priceMark(o))),
-    td({ class: "r", "data-label": "Unit price" }, o.unit_price_cad != null ? h("div", { class: "price-cell" },
+    td({ class: "r", "data-label": "Unit price" }, o.per_ft_cad != null ? h("div", { class: "price-cell" },
+      h("span", { class: "num" }, money(o.per_ft_cad, "CAD")), h("span", { class: "sub" }, "per foot"),
+      o.order_total_cad != null ? h("span", { class: "sub" }, `${money(o.order_total_cad, "CAD")} for your length`) : null, mark("calculated"))
+      : o.unit_price_cad != null ? h("div", { class: "price-cell" },
       h("span", { class: "num" }, money(o.unit_price_cad, "CAD")), h("span", { class: "sub" }, o.pack_text), mark("calculated"))
       : h("span", { class: "muted" }, o.pack_qty ? "n/a" : "single / not stated")),
     td({ class: "r", "data-label": "In CAD" }, o.price_cad != null ? h("div", { class: "price-cell" }, h("span", { class: "num" }, (o.price_type === "range" ? "from " : "") + money(o.price_cad, "CAD")),
@@ -469,6 +486,11 @@ function offerDetail(o, res) {
         o.fx_rate && o.currency !== "CAD" ? [h("dt", {}, "Exchange rate"), h("dd", {}, `1 ${o.currency} = ${o.fx_rate} CAD (Bank of Canada, ${o.fx_date})`)] : null,
         h("dt", {}, "Seller country"), h("dd", {}, `${country(o.country)} (${o.country_basis})`),
         h("dt", {}, "Model match"), h("dd", {}, (o.match_notes || []).join(" ")),
+        (o.spec_confirmed || []).length || (o.spec_missing || []).length || (o.spec_conflicts || []).length ? [h("dt", {}, "Requested specs"), h("dd", {},
+          [(o.spec_confirmed || []).length ? `States: ${o.spec_confirmed.join(", ")}.` : null,
+           (o.spec_missing || []).length ? `Doesn't state: ${o.spec_missing.join(", ")}.` : null,
+           ...(o.spec_conflicts || []).map((c) => `Differs: ${c}.`)].filter(Boolean).join(" "))] : null,
+        o.per_length ? [h("dt", {}, "Priced per"), h("dd", {}, `${perText(o).replace(" / ", "")} (${o.per_length_text})`)] : null,
         Object.keys(o.identifiers || {}).length ? [h("dt", {}, "Identifiers"), h("dd", {}, Object.entries(o.identifiers).map(([k, v]) => `${k}: ${v}`).join(", "))] : null,
         Object.keys(o.specs || {}).length ? [h("dt", {}, "Specs on page"), h("dd", {}, Object.entries(o.specs).map(([k, v]) => `${k}: ${v}`).join("; "))] : null,
         o.bulk ? [h("dt", {}, "Bulk mention"), h("dd", {}, o.bulk)] : null,

@@ -24,7 +24,7 @@ from .costs import PRICES_CHECKED, PRICES_PER_MTOK, estimate_usd
 from .db import Database, iso
 from .export import comparison_xlsx, offers_csv
 from .providers import SETUP_INSTRUCTIONS, provider_status
-from .research import ResearchEngine, ResearchError, ResearchRequest, observation_rows, reanalyze
+from .research import ANALYSIS_VERSION, ResearchEngine, ResearchError, ResearchRequest, observation_rows, reanalyze
 
 log = logging.getLogger("purchasing")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -41,11 +41,16 @@ class ResearchBody(BaseModel):
 class KeysBody(BaseModel):
     anthropic_api_key: str | None = Field(default=None, max_length=300)
     tavily_api_key: str | None = Field(default=None, max_length=300)
+    serpapi_api_key: str | None = Field(default=None, max_length=300)
 
 
-# field -> (.env name, key prefix, accepted format)
-KEY_FORMATS = {"anthropic_api_key": ("ANTHROPIC_API_KEY", "sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
-               "tavily_api_key": ("TAVILY_API_KEY", "tvly-", re.compile(r"tvly-[A-Za-z0-9_\-]{10,}"))}
+# field -> (.env name, what it looks like, accepted format)
+KEY_FORMATS = {"anthropic_api_key": ("ANTHROPIC_API_KEY", "it should start with 'sk-ant-'",
+                                     re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+               "tavily_api_key": ("TAVILY_API_KEY", "it should start with 'tvly-'",
+                                  re.compile(r"tvly-[A-Za-z0-9_\-]{10,}")),
+               "serpapi_api_key": ("SERPAPI_API_KEY", "it's a long code of letters and numbers from "
+                                   "serpapi.com/manage-api-key", re.compile(r"[A-Za-z0-9]{32,100}"))}
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 KeyChecker = Callable[[str], Awaitable[str | None]]
 
@@ -142,12 +147,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def save_keys(body: KeysBody, request: Request) -> dict[str, Any]:
         require_local(request)
         values: dict[str, str] = {}
-        for fld, (env_name, prefix, fmt) in KEY_FORMATS.items():
+        for fld, (env_name, hint, fmt) in KEY_FORMATS.items():
             raw = (getattr(body, fld) or "").strip()
             if not raw:
                 continue
             if not fmt.fullmatch(raw):
-                raise HTTPException(400, f"That doesn't look like a {env_name} (it should start with '{prefix}').")
+                raise HTTPException(400, f"That doesn't look like a {env_name} ({hint}).")
             values[env_name] = raw
         if not values:
             raise HTTPException(400, "Paste a key first.")
@@ -164,6 +169,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 engine.llm = ClaudeAnalyst(settings)
         if "TAVILY_API_KEY" in values:
             settings.tavily_api_key = values["TAVILY_API_KEY"]
+        if "SERPAPI_API_KEY" in values:
+            settings.serpapi_api_key = values["SERPAPI_API_KEY"]
         log.info("saved %s to %s", ", ".join(values), settings.env_file)
         return {"saved": sorted(values), "ready": provider_status(settings)["ready"]}
 
@@ -257,6 +264,15 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         comp = db.get_comparison(cid)
         if not comp:
             raise HTTPException(404, "Comparison not found")
+        if (comp["result"].get("analysis_version") or 1) < ANALYSIS_VERSION:
+            # saved by an older version: apply the current comparison rules to the stored evidence
+            try:
+                result = reanalyze(comp["result"], comp.get("assumptions") or {}, settings.home_province)
+            except Exception:  # noqa: BLE001 - show the saved result rather than fail
+                log.exception("re-analysis of comparison %s failed", cid)
+                return comp
+            db.update_comparison_meta(cid, result=result)
+            comp = db.get_comparison(cid)
         return comp
 
     @app.patch("/api/comparisons/{cid}")

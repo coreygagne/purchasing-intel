@@ -256,7 +256,8 @@ SUFFIX_PRICE_RE = re.compile(
 _NOISE_BEFORE = re.compile(
     r"(save|saving|savings|off|over|under|orders?|rebate|credit|gift|coupon|reward|bonus|shipping on|"
     r"spend|minimum|min\.|up to|starting fee|deposit|from as low as|financ|/mo|per month|was|reg\.?|regular|msrp|list|"
-    r"retail price|approximately|approx\.?|about|~|\+)\s*[:]?\s*$",
+    r"retail price|(?:regular|reg\.?|list|original|was|compare[ -]at|msrp)\s+price|approximately|approx\.?|about|"
+    r"~|\+)\s*[:]?\s*$",
     re.I,
 )
 # a price followed by these words is a fee or saving, not the item's price ("+ $20.00 shipping")
@@ -273,6 +274,7 @@ class PriceMatch:
     high: float | None = None  # set when the text gives a range
     start: int = -1            # position in the text it was found in
     end: int = -1
+    per: "LengthUnit | None" = None  # set when the price is quoted per foot / metre ("$76.50 / ft")
 
     @property
     def is_range(self) -> bool:
@@ -310,9 +312,16 @@ def find_prices(text: str) -> list[PriceMatch]:
         after = text[m.end(): m.end() + 25]
         if _NOISE_BEFORE.search(before) or _NOISE_AFTER.match(after):
             continue
+        end = m.end()
         if _CONTINUES_RE.match(text[m.end("amount"):]):
-            continue  # number continues in a format we can't read reliably - don't guess
-        amount = _to_float(m.group("amount"))
+            # number continues in a format we can't read reliably - don't guess, unless it's a
+            # per-length price with 3-4 decimals ("$101.7887 / m")
+            ext = _LONG_DECIMAL.match(text, m.start("amount"))
+            if not (ext and length_unit_after(text, ext.end())):
+                continue
+            amount, end = float(ext.group(0)), ext.end()
+        else:
+            amount = _to_float(m.group("amount"))
         if amount is None or amount <= 0:
             continue
         prefix = m.group("prefix").strip().lower().replace(" ", "")
@@ -320,12 +329,12 @@ def find_prices(text: str) -> list[PriceMatch]:
         currency = _CURRENCY_PREFIX.get(prefix)
         if suffix:
             currency = "CNY" if suffix == "RMB" else suffix
-        high = _to_float(m.group("high")) if m.group("high") else None
+        high = _to_float(m.group("high")) if m.group("high") and end == m.end() else None
         if high is not None and high <= amount:
             high = None
-        out.append(PriceMatch(amount, currency, m.group("prefix").strip(), m.group(0).strip(), high,
-                              m.start(), m.end()))
-        taken.append((m.start(), m.end()))
+        out.append(PriceMatch(amount, currency, m.group("prefix").strip(), text[m.start():end].strip(), high,
+                              m.start(), end, per=price_length_unit(text, m.start(), end)))
+        taken.append((m.start(), end))
     for m in SUFFIX_PRICE_RE.finditer(text):
         if any(s <= m.start() < e for s, e in taken):
             continue
@@ -337,7 +346,7 @@ def find_prices(text: str) -> list[PriceMatch]:
             continue
         code = m.group("suffix").upper()
         out.append(PriceMatch(amount, "CNY" if code == "RMB" else code, code, m.group(0).strip(),
-                              start=m.start(), end=m.end()))
+                              start=m.start(), end=m.end(), per=price_length_unit(text, m.start(), m.end())))
     return sorted(out, key=lambda p: p.start)
 
 
@@ -735,6 +744,239 @@ def page_title(html: str) -> str | None:
     if soup.title:
         return soup.title.get_text(strip=True)
     return None
+
+
+# ---------------------------------------------------------------- sold by length
+# Cable, hose, chain and rope are often priced per foot or metre. Such prices are compared per foot, never
+# against per-item prices, and a bare "/M" is left unclear: in the wire trade it can mean per 1,000 ft.
+
+FT_PER_M = 3.28084
+_LONG_DECIMAL = re.compile(r"\d+\.\d{3,4}(?!\d)")
+_LEN_UNIT = (r"(?P<unit>lin(?:ear)?\.?\s*f(?:ee|oo)?t\b\.?|l\.f\.|lf\b|ft\b\.?|foot\b|feet\b|'|"
+             r"lin(?:ear)?\.?\s*m(?:etres?|eters?)?\b|metres?\b|meters?\b|mtrs?\b|m\b)(?![²³^]|\d)")
+_PER_LENGTH_AFTER = re.compile(r"\s*(?:/|per\s+|a\s+)\s*(?:(?P<qty>\d{1,3}(?:,\d{3})+|\d+)\s*)?"
+                               r"(?P<k>[Mk](?=\s*(?:ft\b|feet\b|')))?\s*" + _LEN_UNIT, re.I)
+_PER_LENGTH_BEFORE = re.compile(r"\b(?:price|cost)\s+(?:per|/)\s+(?:linear\s+)?(?P<unit>foot|ft|metre|meter|m)\b"
+                                r"[^$\d]{0,12}$", re.I)
+_SOLD_BY_LENGTH = re.compile(r"\b(?:sold|priced|prices?|cut)\s+(?:by|per)\s+(?:the\s+)?(?:linear\s+)?"
+                             r"(?P<unit>foot|feet|ft|metre|meter)\b|\(\s*per\s+(?P<unit2>foot|ft|metre|meter)\s*\)",
+                             re.I)
+
+
+@dataclass
+class LengthUnit:
+    unit: str          # "ft" | "m" | "?" (a bare "/M": per metre or per 1,000 ft)
+    qty: float = 1.0   # the price covers this many units ("per 1,000 ft" -> 1000)
+    text: str = ""     # as written
+
+    @property
+    def feet(self) -> float | None:
+        return self.qty if self.unit == "ft" else (self.qty * FT_PER_M if self.unit == "m" else None)
+
+    @property
+    def label(self) -> str:
+        if self.unit == "?":
+            return "/M (unclear)"
+        n = f"{self.qty:,.0f} " if self.qty != 1 else ""
+        return f"per {n}{self.unit}"
+
+
+def _unit_kind(raw: str) -> str:
+    low = raw.lower()
+    return "ft" if ("f" in low or low == "'") else "m"
+
+
+def length_unit_after(text: str, pos: int) -> LengthUnit | None:
+    """The length unit a price ending at `pos` is quoted per ("/ ft", "per metre", "/1000 ft"), if any."""
+    m = _PER_LENGTH_AFTER.match(text or "", pos)
+    if not m:
+        return None
+    raw = m.group("unit")
+    qty = float(m.group("qty").replace(",", "")) if m.group("qty") else 1.0
+    if m.group("k"):
+        qty *= 1000
+    if raw == "M" and not m.group("qty"):
+        return LengthUnit("?", 1.0, m.group(0).strip())
+    return LengthUnit(_unit_kind(raw), qty, m.group(0).strip())
+
+
+def price_length_unit(text: str, start: int, end: int) -> LengthUnit | None:
+    """Per-length unit stated right after a price, or just before it ("Price per foot: $76.50")."""
+    after = length_unit_after(text, end)
+    if after:
+        return after
+    m = _PER_LENGTH_BEFORE.search(text[max(0, start - 40): start])
+    return LengthUnit(_unit_kind(m.group("unit")), 1.0, m.group(0).strip()) if m else None
+
+
+def sold_by_length(text: str) -> LengthUnit | None:
+    """'Sold by the foot', 'priced per metre', '(per ft)' in a title or page."""
+    m = _SOLD_BY_LENGTH.search(text or "")
+    if not m:
+        return None
+    return LengthUnit(_unit_kind(m.group("unit") or m.group("unit2")), 1.0, m.group(0).strip())
+
+
+def amount_length_unit(text: str, amount: float) -> LengthUnit | None:
+    """Unit written after `amount` where it appears in page text ("$8.42 / ft")."""
+    for shown in {f"{amount:,.2f}", f"{amount:.2f}", f"{amount:g}"}:
+        for m in re.finditer(r"(?<![\d.,])" + re.escape(shown) + r"(?![\d])", text or ""):
+            unit = length_unit_after(text, m.end())
+            if unit:
+                return unit
+    return None
+
+
+# ------------------------------------------------------------- requested specs
+# For plain-language requests (no model number), the sizes and materials the request states are checked
+# against each listing's own title and quoted text: a listing that states a different value is a different
+# item; one that doesn't state it is unconfirmed.
+
+_NUM = r"(?:\d+-\d+/\d+|\d+/\d+|\d+(?:\.\d+)?)"
+_ORDER_LENGTH = re.compile(r"(?<![\w/.-])(?P<n>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>ft\b\.?|feet\b|foot\b|'|m\b|metres?\b|meters?\b)"
+                           r"\s+(?:of|roll|reel|spool|coil|length|cut)\b", re.I)
+_KCMIL = re.compile(r"\b(\d{3,4})\s*-?\s*(?:mcm|kcmil)\b", re.I)
+_AWG = re.compile(r"(?:#\s*)?\b(\d{1,2}|[1-4]/0)\s*-?\s*(?:awg|ga\b|gauge\b)|#\s*(\d{1,2}|[1-4]/0)\b(?!\s*-?\d)", re.I)
+_CORD = re.compile(r"(?<![\d/.])\b(18|16|14|12|10|8|6)\s*/\s*([2-5])\b(?!\s*(?:in|inch|\"|mm))", re.I)
+_MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:mm2|mm²|sq\.?\s*mm)\b", re.I)
+_CONDUCTORS = re.compile(r"\b(\d{1,2})\s*-?\s*(?:conductors?\b|cond\b\.?)|\b(\d{1,2})(?:-|/)?c\b|"
+                         r"\b(single|two|three|four|five|six)[\s-]+conductors?\b", re.I)
+_WORD_NUM = {"single": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+_COPPER = re.compile(r"\b(?:copper|cu)\b", re.I)
+_ALUMINUM = re.compile(r"\b(?:alumin(?:i)?um|alum|al)\b", re.I)
+_ARMOUR_CONTEXT = re.compile(r"armou?r|interlock|sheath|jacket|clad", re.I)
+_UNITS = {
+    "v": "V", "volt": "V", "volts": "V", "kv": "kV", "a": "A", "amp": "A", "amps": "A", "w": "W", "watt": "W",
+    "watts": "W", "kw": "kW", "hp": "HP", "psi": "psi", "gal": "gal", "gallon": "gal", "gallons": "gal",
+    "l": "L", "litre": "L", "litres": "L", "liter": "L", "liters": "L", "mm": "mm", "cm": "cm", "in": "in",
+    "inch": "in", "inches": "in", "\"": "in", "ft": "ft", "feet": "ft", "foot": "ft", "lb": "lb", "lbs": "lb",
+    "kg": "kg", "ton": "ton", "tons": "ton", "tonne": "tonne", "tonnes": "tonne", "oz": "oz",
+}
+_SCALE = {"kV": ("V", 1000.0), "kW": ("W", 1000.0)}
+_GENERIC = re.compile(r"(?<![\w/.])(?P<n>" + _NUM + r")\s*-?\s*(?P<u>kv|kw|v|volts?|amps?|a|watts?|w|hp|psi|"
+                      r"gallons?|gal|litres?|liters?|l|mm|cm|inch(?:es)?|in|\"|feet|foot|ft|lbs?|kg|tonnes?|tons?|oz)"
+                      r"(?![\w²³])", re.I)
+
+
+def _num(value: str) -> float | None:
+    try:
+        if "-" in value and "/" in value:                       # 1-1/2
+            whole, frac = value.split("-", 1)
+            n, d = frac.split("/")
+            return float(whole) + float(n) / float(d)
+        if "/" in value:
+            n, d = value.split("/")
+            return float(n) / float(d)
+        return float(value)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _spec(dim: str, value: str, num: float | None = None, label: str | None = None) -> dict[str, Any]:
+    return {"dim": dim, "value": value, "num": num, "label": label or value}
+
+
+def _conductors(n: int) -> dict[str, Any]:
+    return _spec("conductors", str(n), float(n), f"{n}-conductor")
+
+
+def order_length(text: str) -> dict[str, Any] | None:
+    """A length to buy stated in the request ("300 ft of ... cable", "150 m roll")."""
+    m = _ORDER_LENGTH.search(text or "")
+    if not m:
+        return None
+    n = float(m.group("n").replace(",", ""))
+    unit = _unit_kind(m.group("unit"))
+    return {"value": n, "unit": unit, "feet": n if unit == "ft" else round(n * FT_PER_M, 2),
+            "text": f"{n:g} {unit}", "span": [m.start(), m.end()]}
+
+
+def specs_in(text: str, *, materials: bool = True) -> list[dict[str, Any]]:
+    """Sizes, conductor counts, conductor material and other number+unit specs written in `text`."""
+    text = text or ""
+    out: list[dict[str, Any]] = []
+    used: list[tuple[int, int]] = []
+
+    def add(m: re.Match, spec: dict[str, Any]) -> None:
+        out.append(spec)
+        used.append((m.start(), m.end()))
+
+    for m in _KCMIL.finditer(text):
+        add(m, _spec("conductor size", f"{int(m.group(1))} kcmil"))
+    for m in _CORD.finditer(text):
+        add(m, _spec("conductor size", f"{m.group(1)} AWG"))
+        out.append(_conductors(int(m.group(2))))
+    for m in _AWG.finditer(text):
+        if any(s <= m.start() < e for s, e in used):
+            continue
+        add(m, _spec("conductor size", f"{m.group(1) or m.group(2)} AWG"))
+    for m in _MM2.finditer(text):
+        add(m, _spec("conductor size (mm²)", f"{m.group(1)} mm²", float(m.group(1))))
+    for m in _CONDUCTORS.finditer(text):
+        n = int(m.group(1) or m.group(2) or _WORD_NUM[m.group(3).lower()])
+        if 1 <= n <= 12:
+            add(m, _conductors(n))
+    if materials:
+        cu = bool(_COPPER.search(text))
+        al = any(not _ARMOUR_CONTEXT.search(text[max(0, m.start() - 20): m.end() + 20])
+                 for m in _ALUMINUM.finditer(text))
+        if cu:
+            out.append(_spec("conductor material", "copper"))
+        if al:
+            out.append(_spec("conductor material", "aluminum"))
+    for m in _GENERIC.finditer(text):
+        if any(s <= m.start() < e for s, e in used):
+            continue
+        unit = _UNITS.get(m.group("u").lower(), m.group("u"))
+        num = _num(m.group("n"))
+        if num is None:
+            continue
+        base, factor = _SCALE.get(unit, (unit, 1.0))
+        out.append({"dim": base, "value": f"{m.group('n')} {unit}", "num": num * factor,
+                    "label": f"{m.group('n')} {unit}"})
+    return out
+
+
+def request_specs(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """(specs to check in listings, length to buy) for a plain-language request."""
+    length = order_length(text)
+    body = text or ""
+    if length:
+        s, e = length["span"]
+        body = body[:s] + " " + body[e:]
+    specs = specs_in(body)
+    mats = {sp["value"] for sp in specs if sp["dim"] == "conductor material"}
+    if len(mats) > 1:  # "copper or aluminum": the request doesn't fix it
+        specs = [sp for sp in specs if sp["dim"] != "conductor material"]
+    seen, unique = set(), []
+    for sp in specs:
+        key = (sp["dim"], sp["value"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(sp)
+    return unique, length
+
+
+def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if a.get("num") is not None and b.get("num") is not None:
+        return abs(a["num"] - b["num"]) < 1e-6 * max(1.0, abs(a["num"]))
+    return a["value"].lower() == b["value"].lower()
+
+
+def spec_check(requested: list[dict[str, Any]], listing_text: str) -> dict[str, list[str]]:
+    """Which requested specs the listing text confirms, contradicts or doesn't mention."""
+    found = specs_in(listing_text)
+    out: dict[str, list[str]] = {"confirmed": [], "missing": [], "conflicts": []}
+    for req in requested:
+        same_dim = [f for f in found if f["dim"] == req["dim"]]
+        if any(_same(req, f) for f in same_dim):
+            out["confirmed"].append(req["label"])
+        elif same_dim:
+            shown = ", ".join(dict.fromkeys(f["label"] for f in same_dim))
+            out["conflicts"].append(f"listing says {shown}; you asked for {req['label']}")
+        else:
+            out["missing"].append(req["label"])
+    return out
 
 
 def page_text(html: str, limit: int = 20000) -> str:

@@ -72,6 +72,9 @@ QUERY_TEMPLATES = {
 FATAL_KINDS = {"auth", "quota", "not_configured"}
 AI_PLAN_TIMEOUT_S = 60
 AI_EXTRACT_TIMEOUT_S = 150
+# Bump when analysis rules change; saved comparisons from older versions are re-analysed (free, no searching)
+# when opened. 2: per-length prices, requested-spec checks, implausibly low prices set aside.
+ANALYSIS_VERSION = 2
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -120,6 +123,13 @@ class Identity:
     category: str | None = None
     key_specs: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # plain-language requests: sizes/materials to check in listings, and a length to buy ("300 ft of ...")
+    specs: list[dict[str, Any]] = field(default_factory=list)
+    order_length: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.specs and not self.order_length:
+            self.specs, self.order_length = ex.request_specs(self.name)
 
 
 def _brand_words(text: str, extra: list[str] | None = None) -> list[str]:
@@ -512,14 +522,18 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     by_id = {s.id: s for s in sources}
     for o in offers:
         o.flags = []
-    apply_match(offers, tokens, by_id)
-    an.apply_costs(offers, fx, clean, quantity)
+    if "specs" in identity:
+        specs, length = identity.get("specs") or [], identity.get("order_length") or None
+    else:  # saved before spec checks existed
+        specs, length = ex.request_specs(identity.get("name", ""))
+    apply_match(offers, tokens, by_id, specs)
+    an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity)
     an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
-    rec = an.recommend(offers, tokens)
+    rec = an.recommend(offers, tokens, specs=specs, order_length=length)
     quality = an.quality_evidence(sources, offers, tokens)
     if llm_summary and llm_summary.get("quality"):
         quality["summary"] = llm_summary["quality"]
@@ -544,6 +558,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     product_key = ex.product_key_for(identity.get("name", ""), tokens)
     return {
         "schema_version": 1,
+        "analysis_version": ANALYSIS_VERSION,
         **meta,
         "identity": identity,
         "product_key": product_key,

@@ -49,6 +49,15 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "napacanada.com": SupplierInfo("NAPA Canada", RETAILER, "CA"),
     "partsource.ca": SupplierInfo("PartSource", RETAILER, "CA"),
     "digikey.ca": SupplierInfo("DigiKey (Canada site)", DISTRIBUTOR, "CA"),
+    # Canadian electrical distributors (wire, cable, Teck)
+    "gerrie.com": SupplierInfo("Gerrie Electric", DISTRIBUTOR, "CA"),
+    "nedco.ca": SupplierInfo("Nedco", DISTRIBUTOR, "CA"),
+    "westburne.ca": SupplierInfo("Westburne", DISTRIBUTOR, "CA"),
+    "guillevin.com": SupplierInfo("Guillevin", DISTRIBUTOR, "CA"),
+    "eecol.com": SupplierInfo("EECOL Electric", DISTRIBUTOR, "CA"),
+    "franklinempire.com": SupplierInfo("Franklin Empire", DISTRIBUTOR, "CA"),
+    "texcan.com": SupplierInfo("Texcan", DISTRIBUTOR, "CA"),
+    "lumen.ca": SupplierInfo("Lumen", DISTRIBUTOR, "CA"),
     "mouser.ca": SupplierInfo("Mouser (Canada site)", DISTRIBUTOR, "CA"),
     # Canadian retailers
     "princessauto.com": SupplierInfo("Princess Auto", RETAILER, "CA"),

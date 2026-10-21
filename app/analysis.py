@@ -37,21 +37,28 @@ def fmt_money(value: float | None, currency: str | None) -> str:
 
 
 def apply_costs(offers: list[Offer], fx: dict[str, FxRate], assumptions: dict[str, float | None],
-                quantity: int | None) -> None:
+                quantity: int | None, order_feet: float | None = None) -> None:
     for o in offers:
         o.exclusion_reasons = []
         o.price_cad = o.fx_rate = o.fx_date = o.unit_price = o.unit_price_cad = None
+        o.per_ft_cad = o.order_total_cad = None
         if o.price is not None and o.currency:
             rate = FxRate("CAD", 1.0, "", "identity") if o.currency == "CAD" else fx.get(o.currency)
             if rate:
                 o.fx_rate, o.fx_date = rate.rate_to_cad, rate.rate_date or None
                 o.price_cad = round(o.price * rate.rate_to_cad, 2)
-        if o.price is not None and o.pack_qty:
+        feet = ex.LengthUnit(o.per_length, o.per_length_qty).feet if o.per_length else None
+        if feet and o.price_cad is not None:
+            o.per_ft_cad = round(o.price_cad / feet, 4)
+            if order_feet:
+                o.order_total_cad = round(o.per_ft_cad * order_feet, 2)
+        elif o.price is not None and o.pack_qty:
             o.unit_price = round(o.price / o.pack_qty, 4)
             if o.price_cad is not None:
                 o.unit_price_cad = round(o.price_cad / o.pack_qty, 4)
-        # Totals only make sense for a single, published price
-        o.delivered = delivered_estimate(_offer_dict(o), assumptions, quantity) if o.price_type == "listed" else None
+        # Totals only make sense for a single, published price per item (not per foot or metre)
+        o.delivered = (delivered_estimate(_offer_dict(o), assumptions, quantity)
+                       if o.price_type == "listed" and not o.per_length else None)
 
 
 def _offer_dict(o: Offer) -> dict[str, Any]:
@@ -86,6 +93,10 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append(f"no exchange rate available for {o.currency}")
         if o.superseded():
             reasons.append("superseded by a more reliable price for the same listing")
+        if o.per_length == "?":
+            reasons.append(f"price unit unclear ('{o.per_length_text}': per metre, or per 1,000 ft in the wire trade)")
+        for c in o.spec_conflicts:
+            reasons.append(f"different size or spec: {c}")
         if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued",
                                                                 "unavailable", "not available")):
             reasons.append(f"not available to buy ({o.availability})")
@@ -113,7 +124,34 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
         if o.supplier_type == UNKNOWN and not o.supplier_in_directory:
             o.flags.append("Supplier not in the built-in directory - verify the business before ordering.")
         if not tokens and o.comparable:
-            o.flags.append("Equivalence not verified (no model number) - compare specs before choosing.")
+            if o.spec_missing:
+                o.flags.append(f"The listing doesn't state: {', '.join(o.spec_missing)} - confirm before ordering.")
+            elif not o.spec_confirmed:
+                o.flags.append("Equivalence not verified (no model number) - compare specs before choosing.")
+        if o.per_length in ("ft", "m"):
+            o.flags.append(f"Priced {ex.LengthUnit(o.per_length, o.per_length_qty).label} "
+                           f"({o.per_length_text}) - compared per foot.")
+    _split_length_basis(offers)
+
+
+def _split_length_basis(offers: list[Offer]) -> None:
+    """Per-foot/metre prices and per-item prices can't be ranked together. The larger group (per-length on
+    a tie) stays comparable; the other is set aside with a reason."""
+    pool = [o for o in offers if o.comparable]
+    per_len = [o for o in pool if o.per_length in ("ft", "m")]
+    per_item = [o for o in pool if not o.per_length]
+    if not per_len or not per_item:
+        return
+    if len(per_len) >= len(per_item):
+        for o in per_item:
+            o.exclusion_reasons.append("priced per item (e.g. a reel or cut length) while other listings are "
+                                       "priced per foot/metre - check the length to compare")
+            o.comparable = False
+    else:
+        for o in per_len:
+            o.exclusion_reasons.append(f"priced {ex.LengthUnit(o.per_length, o.per_length_qty).label} while other "
+                                       "listings are priced per item")
+            o.comparable = False
 
 
 STALE_COPY_DAYS = 3
@@ -224,6 +262,8 @@ def _comparison_basis(pool: list[Offer]) -> tuple[str, bool, list[Offer]]:
 
     Listing price when pack sizes agree. Per-unit price only when at least two listings state a
     pack size; then listings without one are counted as single units (and flagged)."""
+    if pool and all(o.per_length in ("ft", "m") for o in pool):
+        return "price per foot (CAD)", False, []
     qtys = {o.pack_qty for o in pool}
     stated = [o for o in pool if o.pack_qty]
     if len(qtys) <= 1 or len(stated) < 2:
@@ -237,7 +277,10 @@ def set_compare_values(offers: list[Offer]) -> None:
     pool = [o for o in offers if o.comparable]
     _, per_unit, unknown = _comparison_basis(pool)
     for o in offers:
-        o.compare_value = o.unit_price_cad if (per_unit and o.pack_qty) else o.price_cad
+        if o.per_ft_cad is not None:
+            o.compare_value = o.per_ft_cad
+        else:
+            o.compare_value = o.unit_price_cad if (per_unit and o.pack_qty) else o.price_cad
     for o in unknown:
         o.flags.append("Pack size not stated in the title - counted as a single unit in the per-unit comparison.")
     if not per_unit and len({o.pack_qty for o in pool}) > 1:
@@ -247,11 +290,17 @@ def set_compare_values(offers: list[Offer]) -> None:
                                "listings don't state one.")
 
 
-def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
+# A comparable price below this share of the median is set aside from both recommendations: it is far
+# more often a different size or variant, a per-foot price or an error than a real deal.
+IMPLAUSIBLE_LOW = 0.35
+
+
+def recommend(offers: list[Offer], tokens: list[str], specs: list[dict[str, Any]] | None = None,
+              order_length: dict[str, Any] | None = None) -> dict[str, Any]:
     """Lowest comparable price and best overall value.
 
     Call after assess_comparability() and set_compare_values(), which decide which offers are
-    comparable and on what basis (listing vs per-unit price); analyze() does this in order.
+    comparable and on what basis (listing, per-unit or per-foot price); analyze() does this in order.
     """
     pool = [o for o in offers if o.comparable]
     notes: list[str] = []
@@ -270,6 +319,31 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
 
     basis, _, unknown_pack = _comparison_basis(pool)
     ranked_pool = pool
+    labels = ", ".join(sp["label"] for sp in specs or [])
+    if specs and not tokens:
+        # prefer listings whose own text states every requested spec
+        confirmed = [o for o in pool if o.spec_confirmed and not o.spec_missing]
+        if confirmed and len(confirmed) < len(pool):
+            notes.append(f"{len(pool) - len(confirmed)} comparable listing(s) don't state all of: {labels}. The "
+                         f"recommendations use the {len(confirmed)} that do.")
+            ranked_pool = confirmed
+        elif not confirmed:
+            notes.append(f"No listing states all of: {labels}. Check the size and material on each listing "
+                         "before ordering.")
+    known = [o for o in ranked_pool if _cmp_value(o) is not None]
+    if len(known) >= 3:
+        med = statistics.median(_cmp_value(o) for o in known)
+        implausible = [o for o in known if _cmp_value(o) < med * IMPLAUSIBLE_LOW]
+        if implausible:
+            ranked_pool = [o for o in ranked_pool if o not in implausible]
+            w = min(implausible, key=lambda o: _cmp_value(o))
+            notes.append(f"Set aside {len(implausible)} listing(s) priced far below the rest, e.g. {w.supplier} at "
+                         f"{fmt_money(w.price, w.currency)} ({(1 - _cmp_value(w) / med) * 100:.0f}% below the median "
+                         f"of CAD {med:,.2f}): likely a different size or variant, a per-foot price or an error. "
+                         "Open it before relying on it.")
+            for o in implausible:
+                o.flags.insert(0, "Not recommended: priced far below the other comparable listings - likely a "
+                                  "different size or variant, a per-foot price or an error.")
     if unknown_pack:
         notes.append(f"Pack sizes differ: {len(unknown_pack)} listing(s) don't state one and were counted as single "
                      "units. Check pack contents before relying on the per-unit ranking.")
@@ -299,7 +373,7 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
     if len(vals) >= 3:
         med = statistics.median(vals)
         lv = _cmp_value(lowest) or 0
-        if med > lv:
+        if (med - lv) / med >= 0.005:
             lowest_expl.append(f"{(med - lv) / med * 100:.0f}% below the median of the {len(vals)} comparable observed "
                                f"prices (calculated; median CAD {med:,.2f}).")
     if lowest in unknown_pack:
@@ -308,10 +382,13 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
         lowest_expl.append("Seller appears to be outside Canada - landed cost may be higher than the listed price.")
     if lowest.delivered and not lowest.delivered["complete"]:
         lowest_expl.append("Delivered cost incomplete: " + ", ".join(lowest.delivered["missing"]) + " unknown.")
+    lowest_expl += _length_lines(lowest, order_length)
+    if lowest.spec_confirmed:
+        lowest_expl.append(f"The listing states: {', '.join(lowest.spec_confirmed)}.")
 
     lowest_rec = {"offer_id": lowest.id, "supplier": lowest.supplier, "price": lowest.price,
                   "currency": lowest.currency, "price_cad": lowest.price_cad, "compare_value": _cmp_value(lowest),
-                  "basis": basis, "url": lowest.url, "explanation": lowest_expl}
+                  "basis": basis, "url": lowest.url, "explanation": lowest_expl, **_length_rec(lowest, order_length)}
 
     # ---- best overall value: transparent points, not "cheapest wins".
     # Offers whose price was only seen in a snippet are considered only when
@@ -375,18 +452,43 @@ def recommend(offers: list[Offer], tokens: list[str]) -> dict[str, Any]:
     if len(scored) > 1:
         runner = scored[1]
         best_expl.append(f"Runner-up: {runner[1].supplier} ({runner[0]:g} points).")
+    if best.id != lowest.id:
+        best_expl += _length_lines(best, order_length)
     best_rec = {"offer_id": best.id, "supplier": best.supplier, "price": best.price, "currency": best.currency,
                 "price_cad": best.price_cad, "compare_value": _cmp_value(best), "url": best.url, "score": best_score,
-                "factors": best_factors, "explanation": best_expl,
+                "factors": best_factors, "explanation": best_expl, **_length_rec(best, order_length),
                 "scoring_note": "Points are a transparent rule of thumb (price up to 40; evidence up to 10; supplier "
                                 "type up to 15; domestic supply up to 15; availability, warranty, shipping, ratings "
                                 "up to 5 each). Use judgment - especially on safety-critical items."}
     if len(pool) == 1:
         notes.append("Only one comparable listing was found, so there is nothing to compare it against.")
-    if not tokens:
+    if not tokens and specs:
+        notes.append(f"No model number in the request: listings were checked against the specs it states "
+                     f"({labels}). Confirm the full specification (ratings, certifications, construction) before "
+                     "ordering.")
+    elif not tokens:
         notes.append("No model number in the request: listings were matched by search relevance only. "
                      "Confirm specifications are equivalent before choosing.")
     return {"lowest": lowest_rec, "best_value": best_rec, "basis": basis, "notes": notes, "pool_size": len(pool)}
+
+
+def _length_lines(o: Offer, order_length: dict[str, Any] | None) -> list[str]:
+    if o.per_ft_cad is None:
+        return []
+    plain = o.per_length == "ft" and o.per_length_qty == 1 and o.currency == "CAD"
+    lines = [] if plain else [f"CAD {o.per_ft_cad:,.2f} per foot (calculated from {fmt_money(o.price, o.currency)} "
+                              f"{ex.LengthUnit(o.per_length, o.per_length_qty).label})."]
+    if o.order_total_cad is not None and order_length:
+        lines.append(f"For {order_length['text']}: about CAD {o.order_total_cad:,.2f} (calculated: per-foot price x "
+                     f"{order_length['feet']:g} ft; before tax, shipping and any cutting or reel charges).")
+    return lines
+
+
+def _length_rec(o: Offer, order_length: dict[str, Any] | None) -> dict[str, Any]:
+    if o.per_ft_cad is None:
+        return {}
+    return {"unit": ex.LengthUnit(o.per_length, o.per_length_qty).label, "per_ft_cad": o.per_ft_cad,
+            "order_total_cad": o.order_total_cad, "order_length": (order_length or {}).get("text")}
 
 
 def _factor_points(scored: list[tuple[float, Offer, list[dict[str, Any]]]], offer: Offer, factor: str) -> float:

@@ -100,6 +100,14 @@ class Offer:
     identifiers: dict[str, str] = field(default_factory=dict)
     is_reference: bool = False
     notes: list[str] = field(default_factory=list)
+    # set when the price is per length ("$76.50 / ft"): unit "ft" | "m" | "?" (unclear), and how many units
+    per_length: str | None = None
+    per_length_qty: float = 1.0
+    per_length_text: str | None = None
+    # requested specs (plain-language requests) this listing's own text confirms / doesn't state / contradicts
+    spec_confirmed: list[str] = field(default_factory=list)
+    spec_missing: list[str] = field(default_factory=list)
+    spec_conflicts: list[str] = field(default_factory=list)
     # filled in by analysis
     price_cad: float | None = None
     fx_rate: float | None = None
@@ -112,7 +120,9 @@ class Offer:
     flags: list[str] = field(default_factory=list)
     confidence: str = "n/a"
     price_label: str = ""
-    compare_value: float | None = None  # CAD value used for ranking (listing or per-unit price)
+    compare_value: float | None = None  # CAD value used for ranking (listing, per-unit or per-foot price)
+    per_ft_cad: float | None = None      # per-length offers: CAD per foot (calculated)
+    order_total_cad: float | None = None  # per-length offers: CAD for the length requested (calculated)
 
     def superseded(self) -> bool:
         return any(n.startswith("Superseded") for n in self.notes)
@@ -214,6 +224,12 @@ def _base_offer(oid: str, src: Source | None, *, url: str, supplier: str | None,
                 observed_at=iso(), provider=provider)
 
 
+def _length_fields(unit: ex.LengthUnit | None) -> dict[str, Any]:
+    if unit is None:
+        return {}
+    return {"per_length": unit.unit, "per_length_qty": unit.qty, "per_length_text": unit.text}
+
+
 def _text_fields(title: str, body: str = "") -> dict[str, Any]:
     """Terms found in a listing. Pack size and condition come from the product title only:
     body text mentions stock counts ("3 units left"), related products and usage ("used by pros")."""
@@ -263,6 +279,7 @@ class OfferBuilder:
                 fields["shipping_scope"] = "canada"  # Google Shopping Canada shows delivery terms for Canada
             if l.condition:
                 fields["condition"] = ex.detect_condition(l.condition) or l.condition.lower()
+            fields.update(_length_fields((match.per if match else None) or ex.sold_by_length(l.title)))
             price = l.price_value if l.price_value is not None else (match.amount if match else None)
             offer = Offer(**base, **fields, price=price, price_high=match.high if match else None,
                           currency=currency, currency_basis=cbasis, price_text=l.price_text,
@@ -301,6 +318,15 @@ class OfferBuilder:
             base["supplier"] = f"{src.name} (seller: {so.seller})"
         fields = _text_fields(title, src.snippet)
         fields["condition"] = so.condition or fields["condition"]
+        if len(distinct) == 1:
+            # schema.org prices carry no unit; the page shows it next to the price ("$8.42 / ft") or says
+            # the item is sold by the foot
+            per = ex.amount_length_unit(src.page_text or "", so.price) or ex.sold_by_length(title)
+            if per is None and src.page_text:
+                per = ex.sold_by_length(src.page_text)
+                if per is not None:
+                    per.text = f"page says '{per.text}'"
+            fields.update(_length_fields(per))
         if so.availability:
             fields["availability"] = re.sub(r"(?<!^)(?=[A-Z])", " ", so.availability).lower()
         if src.country == "CA":
@@ -365,6 +391,7 @@ class OfferBuilder:
             return
         p = prices[0]
         currency, cbasis = _resolve_currency(p, None, src.country)
+        fields.update(_length_fields(p.per or ex.sold_by_length(src.title)))
         self.offers.append(Offer(**base, **fields, price=p.amount, price_high=p.high, currency=currency,
                                  currency_basis=cbasis, price_text=p.raw,
                                  price_type="range" if p.is_range else "listed", price_basis="snippet",
@@ -396,6 +423,11 @@ class OfferBuilder:
             fields["shipping_cost"] = ex.shipping_cost_from_text(fields["shipping_text"])
         if src.country == "CA":
             fields["shipping_scope"] = "canada"
+        per = p.per if p else None
+        if per is None:
+            at = context.find(item["price_text"])
+            per = ex.length_unit_after(context, at + len(item["price_text"])) if at >= 0 else None
+        fields.update(_length_fields(per or ex.sold_by_length(src.title)))
         self.offers.append(Offer(**base, **fields, price=p.amount if p else None, price_high=p.high if p else None,
                                  currency=currency, currency_basis=cbasis, price_text=item["price_text"],
                                  price_type="range" if p and p.is_range else "listed", price_basis="llm_verified",
@@ -440,8 +472,16 @@ def is_search_results_url(url: str) -> bool:
     return bool(_SEARCH_PAGE_RE.search(url or ""))
 
 
-def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source]) -> None:
+def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source],
+                specs: list[dict[str, Any]] | None = None) -> None:
     for o in offers:
+        o.spec_confirmed, o.spec_missing, o.spec_conflicts = [], [], []
+        if specs and not tokens:
+            # only the listing's own words count: its title, page data and quoted text
+            listing = " ".join([o.product_title, *o.specs.values(), *o.identifiers.values(),
+                                o.evidence_quote if o.price_basis in ("snippet", "llm_verified", "shopping_api") else ""])
+            chk = ex.spec_check(specs, listing)
+            o.spec_confirmed, o.spec_missing, o.spec_conflicts = chk["confirmed"], chk["missing"], chk["conflicts"]
         if o.price_basis == "llm_verified":
             # the page title names the main product; the price may belong to an accessory on the same page
             text = o.evidence_quote or ""

@@ -52,8 +52,8 @@ Estimated cost per research with only an Anthropic key:
   researches a month;
 - most of it is the US$0.01 fee per web search.
 
-These figures come from the token counts measured in the Opus live runs, priced for Haiku. Haiku itself
-hasn't been run live in this app yet, so the first research is its live test; its details show the actual
+These figures come from the token counts measured in the Opus live runs, priced for Haiku. In the first
+live Haiku run (with Tavily for search) the Anthropic spend was about US$0.01. Each research shows its own
 estimate.
 
 For stronger reading, set `PI_ANTHROPIC_MODEL`. Only the Opus Quick figure was measured live:
@@ -234,7 +234,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 136 tests; 6 live-network tests are skipped unless enabled (below)
+python -m pytest -q            # 173 tests; 6 live-network tests are skipped unless enabled (below)
 ```
 
 **Live provider check** (real credits: about 5 Tavily credits and 3 SerpApi searches). It confirms that
@@ -375,8 +375,35 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
   research is flagged and drops to low confidence, so it can't be recommended as today's price. A
   fallback FX copy older than 10 days is rejected.
 
+**First live run on the user's MacBook (2026-10-21; Tavily + Claude Haiku 5.5, quick depth).**
+- **Setup:** the Mac starter, the key setup screen and Tavily all worked live. The request was
+  "300 ft of 3-conductor 500 MCM copper Teck cable": 3 Tavily credits, about US$0.01 of Anthropic spend
+  (estimate).
+- **What it exposed:** the run recommended solexpower.ca at **CAD 8.42** as both lowest price and best
+  value. That's 89% below the median (CAD 76.75), and the app flagged it but still let it win. For
+  comparison, Gerrie Electric's listing for this cable is CAD 251.02 per metre (about CAD 76.51 per foot).
+- **Fixed since, and covered by `tests/test_length_and_specs.py`:**
+  - Prices are read per foot or metre: "/ ft", "per foot", "/ Meter", "per 1000 ft", and "sold by the
+    foot" on the page. They're compared per foot, never against per-item prices, and a "300 ft of …"
+    request gets an order total. A bare "/ M" is marked unclear, because in the wire trade it can mean
+    per 1,000 ft.
+  - Plain-language requests are checked against each listing's own wording: size (500 kcmil, 4/0 AWG,
+    12/3), conductor count, copper or aluminum, and number+unit specs like 3/8 in or 50 ft. A listing that
+    states a different value is excluded; aluminum armour isn't read as an aluminum conductor.
+    Recommendations prefer listings that state every requested spec.
+  - A price below 35% of the median of comparable listings is set aside from both recommendations, with
+    a note to check it.
+  - "Regular price" / "list price" amounts are no longer read as the selling price.
+  - Major Canadian electrical distributors were added to the supplier list.
+  - Comparisons saved by an older version are re-analysed under the current rules when opened. This uses
+    the stored evidence, so it's free and runs no searches. Per-length units need the page text, so they
+    apply to new searches only.
+- **Haiku 5.5 reading:** this run is its first live use. Its results looked usable, but one search isn't
+  enough to judge the model.
+
 **Not verified live:**
-- **Tavily and SerpApi.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
+- **SerpApi with a real key** (added by the user on 2026-10-21; not yet run).
+- **Tavily and SerpApi from the build sandbox.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
   403), and no keys for them were available. Their documentation sites couldn't be opened from there, but
   search excerpts of the current docs (checked 2026-10-20) confirm two things:
   - Tavily's `country` takes a lowercase English name ("canada", as sent) and applies only to the
@@ -435,8 +462,10 @@ provider key is still needed to see real prices.
 - **Price evidence without AI.** Prices come from page data, Google Shopping or single-price snippets.
   Pages that show prices only in free text aren't read unless AI is on.
 - **Equivalence by model number.** A model-number match is strong evidence, but kit contents,
-  certifications (CSA/UL) and specs still need a human check. For plain-language requests (no model number),
-  equivalence is explicitly "not verified".
+  certifications (CSA/UL) and specs still need a human check.
+- **Plain-language requests** (no model number): only specs written in the listing's own title or quoted
+  text are checked. A page that offers several sizes but shows one price can still mislead, so check the
+  size on the page before ordering.
 - **Supplier labels.** The supplier directory (`app/suppliers.py`) labels site *types* (distributor,
   retailer, marketplace…). It makes no quality claims; unknown sites are flagged for verification.
 - **Shipping.** Used only when a listing states it. A foreign seller's "free shipping" is not assumed to apply
