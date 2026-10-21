@@ -347,11 +347,14 @@ def find_leads(sources: list[Any], local_businesses: list[dict[str, Any]], *, na
     for b in local_businesses:
         dom = domain_of(b["website"]) if b.get("website") else None
         # a Facebook page or similar isn't the business's own site: searching that domain finds everyone else
+        # a map result can lie outside Thunder Bay: its own address says where (local leads go first)
+        tier = ex.location_tier(b.get("address") or "", HOME["city"])[0]
+        market, prio = ("local", 1) if tier in (None, "local") else (tier, 3)
         if dom and not is_platform_domain(dom):
             if dom not in covered:
-                leads.append(Lead("local_business", dom, b.get("name") or dom, "local", 1))
+                leads.append(Lead("local_business", dom, b.get("name") or dom, market, prio))
         elif b.get("name") and b["name"].lower() not in named:
-            leads.append(Lead("local_name", b["name"], b["name"], "local", 2))
+            leads.append(Lead("local_name", b["name"], b["name"], market, prio + 1))
     for n in local_names or []:
         if n.lower() not in named:
             leads.append(Lead("local_name", n, n, "local", 2))
@@ -388,8 +391,9 @@ def follow_up_plan(leads: list[Lead], name: str, category: Category, round_no: i
         if len(plan) >= budget:
             break
         if lead.kind == "local_name":
-            pq = PlannedQuery(f"{lead.value} {city} {q}", "lead", "canada", "local_suppliers", "local", round_no,
-                              lead=lead.label)
+            pq = PlannedQuery(f"{lead.value} {city} {q}" if lead.market == "local" else f"{lead.value} {q}", "lead",
+                              "canada", "local_suppliers" if lead.market == "local" else "distributor", lead.market,
+                              round_no, lead=lead.label)
         elif lead.kind in ("local_business", "supplier"):
             pq = PlannedQuery(f"{q} price", "lead", "canada", "local_suppliers" if lead.market == "local" else "distributor",
                               lead.market, round_no, [lead.value], lead=lead.label)
@@ -448,10 +452,12 @@ def depth_decision(depth: str, category: Category, name: str, value_estimate: fl
 
 
 def local_queries(name: str, category: Category, n: int) -> list[str]:
-    """Map searches for businesses near Thunder Bay: how sellers of this category describe themselves,
-    then the item itself."""
+    """Map searches for businesses near Thunder Bay: how sellers of this category describe themselves, then the
+    item itself. The town is in the query as well as the map position: SerpApi says results aren't guaranteed to
+    stay near the position given, and recommends naming the place."""
     terms = list(category.supplier_terms) + [_q(name)]
-    return list(dict.fromkeys(terms))[:max(0, n)]
+    place = f"{HOME['city']} {HOME['province']}"
+    return [f"{t} {place}" for t in dict.fromkeys(terms)][:max(0, n)]
 
 
 def channel_table(category: Category, used_ok: bool = True) -> list[dict[str, str]]:

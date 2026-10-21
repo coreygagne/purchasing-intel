@@ -428,3 +428,12 @@ def test_listing_and_category_pages_are_search_results():
               "https://www.yellowpages.ca/search/si/1/Electrical+Equipment/Thunder+Bay+ON"):
         assert is_search_results_url(u), u
     assert not is_search_results_url("https://www.kijiji.ca/v-electrical/thunder-bay/teck-cable/1700000000")
+
+
+def test_map_searches_name_the_town_and_far_results_are_not_local():
+    qs = disc.local_queries("300 MCM teck cable", disc.categorize("300 MCM teck cable"), 2)
+    assert qs == ["electrical supply Thunder Bay ON", "electrical wholesaler Thunder Bay ON"]
+    far = [{"name": "Dryden Electric", "address": "40 King St, Dryden, ON P8N 1B6",
+            "website": "https://drydenelectric.example.ca/"}]
+    [lead] = [l for l in disc.find_leads([], far, name="x", brand=None, category=disc.CATEGORIES["general"])]
+    assert lead.market == "regional" and lead.priority > 1

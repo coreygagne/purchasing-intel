@@ -488,11 +488,15 @@ rounds), Google Maps local listings, contact capture, supplier records, market v
 with HST, channel picks, quote drafts, quality themes, the import checklist and the coverage report are
 covered by `tests/test_discovery.py` and `tests/test_clarify.py` (and the browser test). Not yet confirmed
 against real responses:
-- SerpApi's Google Maps results (`engine=google_maps`, `local_results` with `title`, `address`, `phone`,
-  `website`, `type`, `rating`, `reviews`, `data_cid`) are parsed as documented, but no real response has
-  been seen;
-- site-restricted searches: Tavily `include_domains` and Anthropic `allowed_domains` follow the documented
-  parameters; SerpApi adds `site:` terms;
+- SerpApi's Google Maps results: no real response has been seen yet, but the parser was run on the example
+  response in SerpApi's own documentation (fetched 2026-10-21) and read all four businesses' name, address,
+  phone, website, category, rating and Maps link. The `ll` format (`@lat,lon,12z`) matches the docs. The
+  docs warn that results aren't guaranteed to stay near the position given, so map searches also name
+  "Thunder Bay ON", and a map result's own address decides whether it's local;
+- site-restricted searches: Anthropic `allowed_domains` takes bare domains, as sent (checked against
+  Anthropic's web search docs, 2026-10-21); Tavily `include_domains` restricts results to the listed
+  domains (per LangChain's Tavily reference; Tavily's own docs site couldn't be reached); SerpApi adds
+  `site:` terms;
 - how often real supplier pages publish contacts in a readable form, and the per-research cost of the
   larger search plan (the figures above are estimates).
 
