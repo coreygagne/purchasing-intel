@@ -35,6 +35,15 @@ _DIRECTORY_BUSINESS = re.compile(
     r"permalink|reel|profile\.php|pages/category)\b)[A-Za-z0-9.\-]{3,}/?(?:about/?)?(?:[?#]|$)", re.I)
 
 
+def directory_business_name(s: Source) -> str | None:
+    """The business a directory or social page is about, from its title ("MGM Electric - Electrical Equipment &
+    Supply Stores - Thunder Bay" -> "MGM Electric"); None for search-results pages listing many businesses."""
+    if s.type != BUSINESS_DIRECTORY or not _DIRECTORY_BUSINESS.search(s.url):
+        return None
+    name = re.split(r"\s+[-|–]\s+", s.title)[0].strip()
+    return name or None
+
+
 def _norm_name(name: str) -> str:
     n = re.sub(r"\b(ltd|limited|inc|incorporated|corp|corporation|co|company|the)\b\.?", " ", (name or "").lower())
     return re.sub(r"[^a-z0-9]", "", n)
@@ -125,9 +134,7 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
         if s.type in NOT_SUPPLIERS:
             continue
         if s.type == BUSINESS_DIRECTORY:
-            if not _DIRECTORY_BUSINESS.search(s.url):
-                continue
-            name = re.split(r"\s+[-|–]\s+", s.title)[0].strip()
+            name = directory_business_name(s)
             if not name:
                 continue
             v = get(None, name)

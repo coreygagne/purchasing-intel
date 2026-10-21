@@ -398,3 +398,33 @@ def test_auto_deepening_applies_to_every_search_setting(tmp_path):
 def test_phone_numbers_keep_extensions_and_dedupe_by_digits():
     found = ex.contacts_in_text("Call 1-800-555-0199 ext. 204, or (807) 555-0142 / 807.555.0142")
     assert found["phones"] == ["1-800-555-0199 ext. 204", "(807) 555-0142"]
+
+
+
+def test_leads_follow_named_local_businesses_not_news_pages(tmp_path):
+    fw = local_web()
+    # real-world shapes seen in search results: a trade-news page about a Thunder Bay branch (no item named),
+    # and a Yellow Pages page for one Thunder Bay business with no website given
+    fw.tavily_results["other"] = [
+        tavily_result("https://electricalindustry.example/ces-opens-thunder-bay-branch",
+                      "City Electric Supply Officially Opens Thunder Bay Branch", "The branch opened in June."),
+        tavily_result("https://www.yellowpages.ca/bus/Ontario/Thunder-Bay/MGM-Example-Electric/2408907.html",
+                      "MGM Example Electric - Electrical Equipment & Supply Stores - Thunder Bay",
+                      "724 Macdonell St, Thunder Bay, ON P7B 4A6. 807-555-0177")]
+    res = run(tmp_path, fw, depth="standard")
+    later = [q for q in res["queries"] if q["round"] >= 2]
+    assert not any(q.get("domains") == ["electricalindustry.example"] for q in later)
+    named = [q for q in later if q.get("lead") == "MGM Example Electric"]
+    assert named and named[0]["query"].startswith("MGM Example Electric Thunder Bay")
+    v = next(v for v in res["vendors"] if v["name"] == "MGM Example Electric")
+    assert v["tier"] == "local" and v["phones"][0]["value"] == "807-555-0177"
+    assert v["phones"][0]["basis"] == "directory listing (yellowpages.ca)"
+
+
+def test_listing_and_category_pages_are_search_results():
+    from app.evidence import is_search_results_url
+    for u in ("https://www.kijiji.ca/b-buy-sell/ontario/teck-cable/k0c10l9004",
+              "https://www.alibaba.com/showroom/300-mcm-cable.html",
+              "https://www.yellowpages.ca/search/si/1/Electrical+Equipment/Thunder+Bay+ON"):
+        assert is_search_results_url(u), u
+    assert not is_search_results_url("https://www.kijiji.ca/v-electrical/thunder-bay/teck-cable/1700000000")

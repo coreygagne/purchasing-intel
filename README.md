@@ -496,6 +496,21 @@ against real responses:
 - how often real supplier pages publish contacts in a readable form, and the per-research cost of the
   larger search plan (the figures above are estimates).
 
+**Real-data check of the search plan (2026-10-21).** Six round-1 searches for "300 MCM 3-conductor teck
+cable" were run with the development assistant's own search tool. That tool returns titles and URLs, not
+page text, so this checked what the searches find and how the app classifies it, not prices:
+- The local supplier search found Thunder Bay electrical distributors (EECOL Electric, MGM Electric,
+  Westburne, Guillevin, Gescan, City Electric Supply), mostly through Yellow Pages business pages and trade
+  news. The item search with "Thunder Bay" found no local listing for this cable.
+- Yellow Pages business pages (`/bus/…/Thunder-Bay/…`) match the one-business pattern; its search pages
+  don't. Kijiji category pages and Alibaba / Made-in-China showroom and search pages list many ads.
+- Product pages for other sizes (10/3, 12/3, 4 AWG Teck) came back for the 300 MCM search, which the spec
+  checks exclude; B2B listings were for 350 kcmil and other sizes, not 300 MCM.
+- Fixed from this: trade-news pages that don't name the item are no longer followed up as suppliers;
+  businesses named on a Thunder Bay directory page (or on a map listing without their own website) get a
+  follow-up search by name with the item; Kijiji category and B2B showroom/search pages are treated as
+  search-results pages (low confidence); "audited supplier/manufacturer" is flagged as a marketplace badge.
+
 **Not verified live:**
 - **Tavily and SerpApi from the build sandbox.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
   403), and no keys for them were available. Their documentation sites couldn't be opened from there, but

@@ -266,6 +266,7 @@ class ResearchEngine:
 
             # 4. Follow-up rounds: leads from earlier rounds --------------------------------
             covered: set[str] = set()
+            covered_names: set[str] = set()
             stop_reason = "the search budget for this depth was used" if len(rounds) > 1 else None
             local_dicts = [asdict(b) for b in local_businesses]
             for rno, budget in enumerate(rounds[1:], start=2):
@@ -274,7 +275,9 @@ class ResearchEngine:
                     break
                 leads = disc.find_leads([s for s in sources if is_seller_source(s)], local_dicts,
                                         name=identity.name, brand=brand, category=category, alt_names=alt_names,
-                                        covered_domains=covered)
+                                        covered_domains=covered, covered_names=covered_names,
+                                        local_names=[n for n in (vd.directory_business_name(s) for s in sources
+                                                                 if _in_home_city(s)) if n])
                 fplan = disc.follow_up_plan(leads, identity.name, category, rno, budget, seen)
                 if not fplan:
                     stop_reason = f"no new leads to follow after round {rno - 1}"
@@ -286,6 +289,7 @@ class ResearchEngine:
                 all_hits += new_hits
                 all_plan += fplan
                 covered |= {d for pq in fplan for d in pq.domains or []}
+                covered_names |= {pq.lead for pq in fplan if pq.lead and not pq.domains}
                 sources = build_sources(all_hits, identity.brand_words)
                 new_domains = _seller_domains(sources) - before_domains
                 new_prices = _snippet_prices(sources) - before_prices
@@ -677,6 +681,11 @@ def _round_entry(rno: int, plan: list[PlannedQuery], hits: list[SearchHit], new_
             "failed": sum(1 for pq in plan if pq.status == "failed"), "results": len(hits),
             "new_suppliers": sorted(new_domains)[:25], "new_supplier_count": len(new_domains),
             "new_prices": len(new_prices), "leads": [pq.lead for pq in plan if pq.lead]}
+
+
+def _in_home_city(s: Source) -> bool:
+    """A directory page placed in Thunder Bay by its own title or address path (".../Thunder-Bay/...")."""
+    return disc.HOME["city"].lower() in f"{s.title} {s.url.replace('-', ' ').replace('+', ' ')}".lower()
 
 
 def _snippet_details(s: Source) -> None:

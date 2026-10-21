@@ -1173,7 +1173,7 @@ _FINAL_BID = re.compile(r"\b(?:winning|final)\s+bid\b", re.I)
 
 _BADGES = re.compile(r"amazon'?s\s+choice|#?1\s+best\s+seller|\bbest\s+seller\b|top\s+rated(?:\s+(?:plus|seller))?|"
                      r"verified\s+supplier|gold\s+supplier|trade\s+assurance|overall\s+pick|top\s+brand|"
-                     r"verified\s+seller", re.I)
+                     r"verified\s+seller|audited\s+(?:supplier|manufacturer)", re.I)
 
 
 def price_kind(text: str, start: int = 0, end: int | None = None) -> str:

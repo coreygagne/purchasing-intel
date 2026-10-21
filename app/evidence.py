@@ -504,7 +504,8 @@ def _around(text: str, needle: str, width: int = 120) -> str:
 
 
 _SEARCH_PAGE_RE = re.compile(r"(/s\?|/search\b|/sch/|/shop\?|/shop/[^/?]*\?|[?&](q|k|_nkw|query|search_query|keyword|"
-                             r"searchterm|text)=)", re.I)
+                             r"searchterm|text)=|kijiji\.ca/b-|/showroom/|/products-search/|/search/si/|"
+                             r"/hot-china-products/)", re.I)
 
 
 def is_search_results_url(url: str) -> bool:

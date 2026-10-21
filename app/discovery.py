@@ -309,21 +309,52 @@ class Lead:
     priority: int = 5
 
 
+_STOP = {"the", "and", "for", "with", "new", "type", "price", "buy", "sale", "cable", "wire", "supply", "supplies"}
+
+
+def _item_words(name: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", name.lower()) if (len(w) >= 3 or w.isdigit()) and w not in _STOP}
+
+
+def _about_item(text: str, name: str, tokens: list[str]) -> bool:
+    """Does a page's title/snippet name the item? Its model number, or most of the request's distinctive words."""
+    low = text.lower()
+    if tokens:
+        return any(t.lower() in low for t in tokens)
+    words = _item_words(name)
+    if not words:
+        return False
+    hit = sum(1 for w in words if re.search(rf"\b{re.escape(w)}\b", low))
+    return hit >= max(1, (len(words) + 1) // 2)
+
+
 def find_leads(sources: list[Any], local_businesses: list[dict[str, Any]], *, name: str, brand: str | None,
                category: Category, alt_names: list[str] | None = None,
-               covered_domains: set[str] | None = None) -> list[Lead]:
+               covered_domains: set[str] | None = None, local_names: list[str] | None = None,
+               covered_names: set[str] | None = None) -> list[Lead]:
     """Leads worth a focused follow-up search, local first.
 
-    A supplier lead is a seller site seen in the results that showed no price for this item (it may carry it or
-    quote it). Local businesses from map listings are followed on their own websites."""
+    - A local business from a map listing is followed on its own website; one with no website (or only a
+      Facebook-type page), and a business named on a directory page, is searched by name with the item.
+    - A supplier lead is a seller page that names the item but showed no price for it (it may carry it or
+      quote it). Pages that don't name the item (news, other products) aren't leads.
+    - Manufacturer sites get a where-to-buy search; a brand gets a dealer search near Thunder Bay."""
     from .suppliers import DISTRIBUTOR, MANUFACTURER, RETAILER, UNKNOWN, domain_of, is_platform_domain
     covered = covered_domains or set()
+    named = {n.lower() for n in (covered_names or set())}
+    tokens = ex.model_tokens(name)
     leads: list[Lead] = []
     for b in local_businesses:
         dom = domain_of(b["website"]) if b.get("website") else None
         # a Facebook page or similar isn't the business's own site: searching that domain finds everyone else
-        if dom and dom not in covered and not is_platform_domain(dom):
-            leads.append(Lead("local_business", dom, b.get("name") or dom, "local", 1))
+        if dom and not is_platform_domain(dom):
+            if dom not in covered:
+                leads.append(Lead("local_business", dom, b.get("name") or dom, "local", 1))
+        elif b.get("name") and b["name"].lower() not in named:
+            leads.append(Lead("local_name", b["name"], b["name"], "local", 2))
+    for n in local_names or []:
+        if n.lower() not in named:
+            leads.append(Lead("local_name", n, n, "local", 2))
     for s in sources:
         if s.domain in covered or s.type not in (DISTRIBUTOR, RETAILER, UNKNOWN, MANUFACTURER):
             continue
@@ -331,7 +362,7 @@ def find_leads(sources: list[Any], local_businesses: list[dict[str, Any]], *, na
         local = HOME["city"].lower() in text.lower()
         if s.type == MANUFACTURER:
             leads.append(Lead("manufacturer", s.domain, s.name, "any", 3))
-        elif not ex.find_prices(s.snippet or ""):
+        elif not ex.find_prices(s.snippet or "") and _about_item(text, name, tokens):
             leads.append(Lead("supplier", s.domain, s.name, "local" if local else "canada", 2 if local else 4))
     if brand:
         leads.append(Lead("brand", brand, f"{brand} dealer network", "local", 2))
@@ -356,7 +387,10 @@ def follow_up_plan(leads: list[Lead], name: str, category: Category, round_no: i
     for lead in leads:
         if len(plan) >= budget:
             break
-        if lead.kind in ("local_business", "supplier"):
+        if lead.kind == "local_name":
+            pq = PlannedQuery(f"{lead.value} {city} {q}", "lead", "canada", "local_suppliers", "local", round_no,
+                              lead=lead.label)
+        elif lead.kind in ("local_business", "supplier"):
             pq = PlannedQuery(f"{q} price", "lead", "canada", "local_suppliers" if lead.market == "local" else "distributor",
                               lead.market, round_no, [lead.value], lead=lead.label)
         elif lead.kind == "manufacturer":
