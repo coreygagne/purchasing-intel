@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS price_observations (
 CREATE INDEX IF NOT EXISTS idx_obs_product ON price_observations(product_key, observed_at);
 CREATE INDEX IF NOT EXISTS idx_obs_comparison ON price_observations(comparison_id);
 
+CREATE TABLE IF NOT EXISTS clarifications (
+    key TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    answers_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fx_rates (
     currency TEXT NOT NULL,
     rate_date TEXT NOT NULL,
@@ -281,6 +288,18 @@ class Database:
         with self.tx() as c:
             rows = c.execute(sql, args).fetchall()
         return [dict(r) for r in reversed(rows)]
+
+    # --------------------------------------------------------- clarifications
+    def get_answers(self, key: str) -> dict[str, Any]:
+        with self.tx() as c:
+            row = c.execute("SELECT answers_json FROM clarifications WHERE key = ?", (key,)).fetchone()
+        return json.loads(row["answers_json"]) if row else {}
+
+    def save_answers(self, key: str, query: str, answers: dict[str, Any]) -> None:
+        merged = {**self.get_answers(key), **answers}
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO clarifications (key, query, answers_json, updated_at) VALUES (?, ?, ?, ?)",
+                      (key, query, json.dumps(merged), iso()))
 
     # -------------------------------------------------------------------- fx
     def get_fx(self, currency: str, max_age_hours: int = 24) -> dict[str, Any] | None:

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
+from . import clarify as cl
 from . import extract as ex
 from .config import Settings, load_settings, save_env_values
 from .costs import PRICES_CHECKED, PRICES_PER_MTOK, estimate_usd
@@ -36,6 +37,13 @@ class ResearchBody(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=10_000_000)
     force: bool = False
     comparison_id: int | None = None
+    # answers to the clarifying questions; None = skipped. Stored, and merged with earlier answers.
+    answers: dict[str, str | int | float | bool | None] | None = None
+
+
+class ClarifyBody(BaseModel):
+    query: str = Field(min_length=1, max_length=600)
+    quantity: int | None = Field(default=None, ge=1, le=10_000_000)
 
 
 class KeysBody(BaseModel):
@@ -175,6 +183,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return {"saved": sorted(values), "ready": provider_status(settings)["ready"]}
 
     # ---------------------------------------------------------------- research
+    @app.post("/api/clarify")
+    def clarify(body: ClarifyBody) -> dict[str, Any]:
+        """Questions worth answering before this research (rules only - no search, no AI, no cost)."""
+        query = body.query.strip()
+        return cl.questions(query, body.quantity, db.get_answers(cl.key_for(query)))
+
     @app.post("/api/research")
     async def start_research(body: ResearchBody):
         if not provider_status(settings)["ready"]:
@@ -200,6 +214,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                     "message": f"This month's spending limit of US${settings.monthly_budget_usd:.2f} is reached "
                                f"(about US${spent:.2f} used, estimated). New research starts again on the 1st, "
                                "or raise PI_MONTHLY_BUDGET_USD in the .env file and restart."})
+        if body.answers:
+            db.save_answers(cl.key_for(query), query, {k: v for k, v in body.answers.items() if len(k) <= 40})
+        applied = cl.apply_answers(query, db.get_answers(cl.key_for(query)), body.quantity)
         search_id = db.create_search(query, normalized, ex.classify_input(query), body.depth)
         # Forget finished jobs after a while (results live in the database, not here)
         for jid in [j.id for j in jobs.values() if j.status != "running" and len(jobs) > 200]:
@@ -217,8 +234,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
         async def runner() -> None:
             try:
-                req = ResearchRequest(query=query, depth=body.depth, quantity=body.quantity,
-                                      comparison_id=body.comparison_id)
+                req = ResearchRequest(query=query, depth=body.depth, quantity=applied["quantity"],
+                                      comparison_id=body.comparison_id, used_ok=applied["used_ok"],
+                                      answers=applied["answers"], assumptions=applied["assumptions"],
+                                      spec_text=applied["spec_text"], length_text=applied["length_text"],
+                                      intended_use=applied["intended_use"])
                 result = await asyncio.wait_for(engine.run(req, progress, meter), timeout=settings.job_timeout_s)
                 existing = db.get_comparison(body.comparison_id) if body.comparison_id else None
                 if existing and existing.get("assumptions"):

@@ -68,7 +68,8 @@ AI_EXTRACT_TIMEOUT_S = 150
 # Bump when analysis rules change; saved comparisons from older versions are re-analysed (free, no searching)
 # when opened. 2: per-length prices, requested-spec checks, implausibly low prices set aside.
 # 3: with a length to buy, prices must say what length they cover; reel sizes read from titles.
-ANALYSIS_VERSION = 3
+# 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
+ANALYSIS_VERSION = 4
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -96,6 +97,9 @@ class ResearchRequest:
     # answers to the clarifying questions ({"intended_use": ..., "budget_cad": ...}) and what was assumed
     answers: dict[str, Any] = field(default_factory=dict)
     assumptions: list[str] = field(default_factory=list)
+    spec_text: str = ""             # specs from the answers ("1000 V copper"), checked in listings
+    length_text: str | None = None  # a length to buy from the answers ("300 ft of")
+    intended_use: str | None = None
 
 
 @dataclass
@@ -203,11 +207,16 @@ class ResearchEngine:
             # 1. Understand the request ------------------------------------------------
             progress("Understanding the request", 5)
             identity, ref_fetch = await self._identify(query, fetcher, providers, reader)
+            if (req.spec_text or req.length_text) and identity.input_type != "url":
+                # answers to the clarifying questions are checked in listings like specs in the request itself
+                specs, length = ex.request_specs(f"{identity.name} {req.spec_text} {req.length_text or ''}")
+                identity.specs, identity.order_length = specs, identity.order_length or length
             extra_queries: list[str] = []
             ai_alt_names: list[str] = []
             if self.llm is not None:
                 try:
-                    plan_info = await asyncio.wait_for(self.llm.plan(identity.name, identity.input_type),
+                    request = identity.name + (f" (intended use: {req.intended_use})" if req.intended_use else "")
+                    plan_info = await asyncio.wait_for(self.llm.plan(request, identity.input_type),
                                                        timeout=AI_PLAN_TIMEOUT_S)
                     identity.category = plan_info.get("category")
                     identity.key_specs = plan_info.get("key_specs", [])[:8]
@@ -346,7 +355,7 @@ class ResearchEngine:
                 "local_businesses": local_dicts,
                 "contact_pages": contact_pages,
                 "answers": dict(req.answers),
-                "assumptions": list(req.assumptions),
+                "stated_assumptions": list(req.assumptions),  # for unanswered questions ("assumptions" = import inputs)
                 "credits": credits,
                 "cost_estimate": {"usd": estimate_usd(credits), "prices_checked": PRICES_CHECKED,
                                   "note": "Anthropic charges estimated from reported usage at list prices"},
@@ -823,7 +832,7 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
     fx = {cur: FxRate(**r) for cur, r in (result.get("fx") or {}).items()}
     meta_keys = ["query", "depth", "quantity", "researched_at", "duration_s", "providers", "queries", "credits",
                  "cost_estimate", "fetch", "fx_errors", "plan", "local_businesses", "contact_pages", "answers",
-                 "assumptions"]
+                 "stated_assumptions"]
     meta = {k: result.get(k) for k in meta_keys}
     if quantity is not None:
         meta["quantity"] = quantity or None
