@@ -16,12 +16,14 @@ from . import extract as ex
 from .db import iso
 from .fetch import FetchResult
 from .providers.base import SearchHit, ShoppingListing
-from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COUNTRY_CURRENCY, DISTRIBUTOR, GOVERNMENT, MANUFACTURER,
-                        MARKETPLACE, RETAILER, REVIEW_TYPES, UNKNOWN, classify_source, domain_of,
-                        lookup_by_name)
+from .suppliers import (B2B_MARKETPLACE, COUNTRY_CURRENCY, GOVERNMENT, MARKETPLACE, REVIEW_TYPES, SELLER_TYPES,
+                        UNKNOWN, classify_source, domain_of, lookup_by_name)
 
-SELLER_PURPOSES = {"price", "suppliers", "wholesale", "cross_border", "input_url", "ai_suggested", "shopping"}
-SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN}
+# Searches whose results can be offers to buy. The channel names come from the research plan (discovery.py);
+# "price", "suppliers" and "cross_border" are from comparisons saved before it.
+SELLER_PURPOSES = {"price", "suppliers", "wholesale", "cross_border", "input_url", "ai_suggested", "shopping",
+                   "local_suppliers", "retail", "distributor", "dealer", "manufacturer", "b2b", "used", "auction",
+                   "completed_sales", "property_listings", "property_sales", "lead"}
 
 PRICE_BASIS_LABELS = {
     "structured_data": "Quoted: supplier page data (schema.org)",
@@ -53,6 +55,15 @@ class Source:
     raw_content: str | None = None
     fetch: dict[str, Any] | None = None
     page_text: str | None = None
+    # research plan: channels, markets and the first round that found this page
+    channels: list[str] = field(default_factory=list)
+    markets: list[str] = field(default_factory=list)
+    round: int = 1
+    # contacts copied from the page or its search result: {"phones", "emails", "addresses", "basis", "seen_at"}
+    contacts: dict[str, Any] | None = None
+    # where the business is: {"tier": local|regional|canada|us|international, "basis": ...}
+    location: dict[str, Any] | None = None
+    badges: list[str] = field(default_factory=list)  # marketplace badges seen ("Amazon's Choice")
 
     def public(self) -> dict[str, Any]:
         d = asdict(self)
@@ -104,6 +115,9 @@ class Offer:
     per_length: str | None = None
     per_length_qty: float = 1.0
     per_length_text: str | None = None
+    # what the price is: "asking" (an offer to sell), "current_bid" (an auction in progress) or
+    # "completed_sale" (what an item sold for - market evidence, not an offer you can buy at)
+    price_kind: str = "asking"
     # requested specs (plain-language requests) this listing's own text confirms / doesn't state / contradicts
     spec_confirmed: list[str] = field(default_factory=list)
     spec_missing: list[str] = field(default_factory=list)
@@ -157,6 +171,11 @@ def build_sources(hits: list[SearchHit], brand_words: list[str]) -> list[Source]
                 s.snippet = h.snippet
             if h.raw_content and not s.raw_content:
                 s.raw_content = h.raw_content
+            if h.channel and h.channel not in s.channels:
+                s.channels.append(h.channel)
+            if h.market and h.market not in s.markets:
+                s.markets.append(h.market)
+            s.round = min(s.round, h.round)
             continue
         cls = classify_source(h.url, h.title, brand_words)
         by_url[key] = Source(
@@ -164,7 +183,8 @@ def build_sources(hits: list[SearchHit], brand_words: list[str]) -> list[Source]
             snippet=h.snippet.strip(), type=cls.type, name=cls.name, country=cls.country,
             country_basis=cls.country_basis, in_directory=cls.in_directory, purposes=[h.purpose],
             queries=[h.query], provider=h.provider, retrieved_at=iso(), published_date=h.published_date,
-            raw_content=h.raw_content,
+            raw_content=h.raw_content, channels=[h.channel] if h.channel else [],
+            markets=[h.market] if h.market else [], round=h.round,
         )
         order.append(key)
     sources = [by_url[k] for k in order]
@@ -395,7 +415,8 @@ class OfferBuilder:
         self.offers.append(Offer(**base, **fields, price=p.amount, price_high=p.high, currency=currency,
                                  currency_basis=cbasis, price_text=p.raw,
                                  price_type="range" if p.is_range else "listed", price_basis="snippet",
-                                 evidence_quote=_around(src.snippet or src.title, p.raw)))
+                                 evidence_quote=_around(src.snippet or src.title, p.raw),
+                                 price_kind=_price_kind_near(src.snippet or src.title, p.raw)))
 
     def from_llm(self, src: Source, item: dict[str, Any], context: str) -> None:
         """Offer read from page text by the language model. The caller has verified that `context`
@@ -431,7 +452,7 @@ class OfferBuilder:
         self.offers.append(Offer(**base, **fields, price=p.amount if p else None, price_high=p.high if p else None,
                                  currency=currency, currency_basis=cbasis, price_text=item["price_text"],
                                  price_type="range" if p and p.is_range else "listed", price_basis="llm_verified",
-                                 evidence_quote=context))
+                                 evidence_quote=context, price_kind=_price_kind_near(context, item["price_text"])))
 
 
 def ex_text_in(text: str, src: Source) -> bool:
@@ -448,6 +469,11 @@ def _normalized(text: str | None) -> str:
     text = (text or "").translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
                                                  "\xa0": " "}))
     return _squash(text)
+
+
+def _price_kind_near(text: str, price_text: str) -> str:
+    at = (text or "").find(price_text)
+    return ex.price_kind(text, at, at + len(price_text)) if at >= 0 else ex.price_kind(text)
 
 
 def _delivery_cost(text: str) -> float | None:

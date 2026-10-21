@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from . import analysis as an
+from . import discovery as disc
 from . import extract as ex
 from .config import Settings
 from .costs import PRICES_CHECKED, estimate_usd
@@ -26,10 +27,11 @@ from .evidence import Offer, OfferBuilder, Source, apply_match, build_sources, i
 from .fetch import FetchResult, PageFetcher
 from .fx import FxRate, FxService
 from .import_costs import clean_assumptions, general_notes, LINKS
-from .providers import ProviderError, ProviderSet, ShoppingListing, build_providers
+from .discovery import PlannedQuery
+from .providers import LocalBusiness, ProviderError, ProviderSet, ShoppingListing, build_providers
 from .providers.anthropic_fetch import VIA, AnthropicFetcher, AnthropicPageReader
 from .providers.base import SearchHit
-from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER
+from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER, domain_of
 
 log = logging.getLogger(__name__)
 
@@ -50,24 +52,10 @@ GENERIC_WORDS = {
     "pliers", "hammer", "knife", "blade", "bit", "bits", "replacement", "part", "parts", "kit", "nitrile",
 }
 
-DEPTHS = {
-    "quick": {"purposes": ["price", "reviews", "wholesale"], "search_depth": "basic", "max_results": 8},
-    "standard": {"purposes": ["price", "suppliers", "wholesale", "reviews", "issues", "specs"],
-                 "search_depth": "basic", "max_results": 8},
-    "deep": {"purposes": ["price", "suppliers", "wholesale", "reviews", "issues", "specs", "alternatives",
-                          "cross_border"], "search_depth": "advanced", "max_results": 10},
-}
-
-QUERY_TEMPLATES = {
-    "price": ("{q} price", "canada"),
-    "suppliers": ("{q} supplier distributor Canada", "canada"),
-    "wholesale": ("{q} wholesale bulk price MOQ", None),
-    "reviews": ("{q} review", None),
-    "issues": ("{q} problems complaints recall", None),
-    "specs": ("{q} specifications datasheet", None),
-    "alternatives": ("{q} alternative equivalent comparable", None),
-    "cross_border": ("{q} price USD buy", None),
-}
+DEPTHS = tuple(disc.DEPTH_BUDGET)
+# product pages read per research, as a multiple of FETCH_MAX_PAGES (deeper research finds more sellers)
+FETCH_SCALE = {"quick": 1.0, "standard": 1.5, "deep": 2.0}
+CONTACT_PAGES = {"quick": 2, "standard": 5, "deep": 8}  # local/regional suppliers' own pages read for contacts
 
 FATAL_KINDS = {"auth", "quota", "not_configured"}
 AI_PLAN_TIMEOUT_S = 60
@@ -99,17 +87,10 @@ class ResearchRequest:
     depth: str = "standard"
     quantity: int | None = None
     comparison_id: int | None = None
-
-
-@dataclass
-class PlannedQuery:
-    query: str
-    purpose: str
-    country: str | None
-    status: str = "pending"
-    result_count: int = 0
-    error: dict[str, Any] | None = None
-    provider: str | None = None
+    used_ok: bool = True  # include used, refurbished, auction and surplus channels
+    # answers to the clarifying questions ({"intended_use": ..., "budget_cad": ...}) and what was assumed
+    answers: dict[str, Any] = field(default_factory=dict)
+    assumptions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -160,15 +141,6 @@ def _clean_title(name: str, tokens_hint: str = "") -> str:
     return " ".join(parts).strip()
 
 
-def plan_queries(name: str, depth: str, extra: list[str] | None = None) -> list[PlannedQuery]:
-    cfg = DEPTHS.get(depth, DEPTHS["standard"])
-    q = re.sub(r"\s+", " ", name).strip()[:200]
-    plan = [PlannedQuery(QUERY_TEMPLATES[p][0].format(q=q), p, QUERY_TEMPLATES[p][1]) for p in cfg["purposes"]]
-    for e in (extra or [])[:3]:
-        plan.append(PlannedQuery(e[:200], "ai_suggested", "canada"))
-    return plan
-
-
 class ResearchEngine:
     def __init__(self, settings: Settings, db: Database, llm: Any | None = None,
                  transport: httpx.AsyncBaseTransport | None = None, anthropic_client: Any | None = None):
@@ -191,7 +163,7 @@ class ResearchEngine:
         if not query:
             raise ResearchError("Enter a product name, model number, description or URL.", kind="bad_input")
         depth = req.depth if req.depth in DEPTHS else "standard"
-        cfg = DEPTHS[depth]
+        cfg = disc.DEPTH_BUDGET[depth]
         async with self._client() as client:
             providers = build_providers(self.settings, client, self.anthropic_client)
             if providers.web is None:
@@ -226,6 +198,8 @@ class ResearchEngine:
             # 1. Understand the request ------------------------------------------------
             progress("Understanding the request", 5)
             identity, ref_fetch = await self._identify(query, fetcher, providers, reader)
+            extra_queries: list[str] = []
+            ai_alt_names: list[str] = []
             if self.llm is not None:
                 try:
                     plan_info = await asyncio.wait_for(self.llm.plan(identity.name, identity.input_type),
@@ -236,29 +210,71 @@ class ResearchEngine:
                     if brand and brand.lower() in identity.name.lower():
                         identity.brand_words = _brand_words(identity.name, [brand])
                     extra_queries = plan_info.get("search_queries", [])
+                    ai_alt_names = plan_info.get("alternative_names", [])
                     llm_usage["plan"] = plan_info.get("_usage")
                 except Exception as exc:  # noqa: BLE001 - AI is optional; report and continue
                     identity.notes.append(f"AI request planning unavailable: {_ai_error(exc)}")
-                    extra_queries = []
-            else:
-                extra_queries = []
 
-            # 2. Search -----------------------------------------------------------------
-            plan = plan_queries(identity.name, depth, extra_queries)
-            progress(f"Searching the web ({len(plan)} queries via {providers.web.name})", 15)
-            hits = await self._search_all(providers, plan, cfg)
-            listings: list[ShoppingListing] = []
-            shopping_status: dict[str, Any] | None = None
-            if providers.shopping is not None:
-                progress("Checking Google Shopping (Canada)", 35)
-                try:
-                    listings = await providers.shopping.shopping(identity.name)
-                    shopping_status = {"query": identity.name, "status": "ok", "result_count": len(listings)}
-                except ProviderError as exc:
-                    shopping_status = {"query": identity.name, "status": "failed", "error": exc.to_dict()}
+            # 2. Plan: category, channels, markets (Thunder Bay first) -------------------
+            category = disc.categorize(identity.name, identity.category)
+            brand = identity.brand_words[0] if identity.brand_words else None
+            alt_names = list(dict.fromkeys(disc.alt_spellings(identity.name) + ai_alt_names))[:3]
+            stated_budget = _number(req.answers.get("budget_cad"))
+            quantity = req.quantity
+            rounds, deepened = disc.depth_decision(depth, category, identity.name, None, quantity, stated_budget)
+            plan = disc.initial_plan(identity.name, category, depth, brand=brand, alt_names=alt_names,
+                                     ai_queries=extra_queries, used_ok=req.used_ok, budget=rounds[0])
+            seen = {disc._norm(pq) for pq in plan}
 
-            # 3. Evidence -----------------------------------------------------------------
-            sources = build_sources(hits, identity.brand_words)
+            # 3. Round 1 searches, Google Shopping and local map listings, together ----------
+            progress(f"Searching Thunder Bay first, then wider ({len(plan)} searches via {providers.web.name})", 12)
+            local_qs = disc.local_queries(identity.name, category, cfg["maps"])
+            hits, (listings, shopping_status), (local_businesses, local_status) = await _gather_or_raise(
+                self._search_all(providers, plan, cfg),
+                self._shopping(providers, identity.name),
+                self._local(providers, local_qs))
+            all_hits = list(hits)
+            all_plan = list(plan)
+            sources = build_sources(all_hits, identity.brand_words)
+            round_log = [_round_entry(1, plan, hits, set(), set(), sources)]
+            if deepened is None:
+                # a rough value from round-1 snippets decides whether this is an expensive purchase
+                value = disc.snippet_value_estimate(sources)
+                more, why = disc.depth_decision(depth, category, identity.name, value, quantity, stated_budget)
+                if why:
+                    rounds, deepened = more, why
+
+            # 4. Follow-up rounds: leads from earlier rounds --------------------------------
+            covered: set[str] = set()
+            stop_reason = "the search budget for this depth was used" if len(rounds) > 1 else None
+            local_dicts = [asdict(b) for b in local_businesses]
+            for rno, budget in enumerate(rounds[1:], start=2):
+                if any(pq.error and pq.error.get("kind") in FATAL_KINDS for pq in all_plan):
+                    stop_reason = "a search provider error stopped further searching"
+                    break
+                leads = disc.find_leads([s for s in sources if is_seller_source(s)], local_dicts,
+                                        name=identity.name, brand=brand, category=category, alt_names=alt_names,
+                                        covered_domains=covered)
+                fplan = disc.follow_up_plan(leads, identity.name, category, rno, budget, seen)
+                if not fplan:
+                    stop_reason = f"no new leads to follow after round {rno - 1}"
+                    break
+                progress(f"Following up {len(fplan)} leads (round {rno})", 12 + 10 * (rno - 1))
+                before_domains = _seller_domains(sources)
+                before_prices = _snippet_prices(sources)
+                new_hits = await self._search_all(providers, fplan, cfg, required=False)
+                all_hits += new_hits
+                all_plan += fplan
+                covered |= {d for pq in fplan for d in pq.domains or []}
+                sources = build_sources(all_hits, identity.brand_words)
+                new_domains = _seller_domains(sources) - before_domains
+                new_prices = _snippet_prices(sources) - before_prices
+                round_log.append(_round_entry(rno, fplan, new_hits, new_domains, new_prices, sources))
+                if not new_domains and not new_prices:
+                    stop_reason = f"round {rno} found no new suppliers or prices"
+                    break
+
+            # 5. Evidence -----------------------------------------------------------------
             builder = OfferBuilder(identity.brand_words, identity.model_tokens)
             if ref_fetch is not None:
                 ref_src = add_source(sources, url=identity.reference_url or query, title=identity.name,
@@ -274,10 +290,14 @@ class ResearchEngine:
                 elif ref_fetch.ok and ref_fetch.text:
                     ref_src.page_text = ex.focus_text(ref_fetch.text, identity.model_tokens, PAGE_TEXT_CHARS)
             builder.from_shopping(listings, sources)
+            for s in sources:
+                _snippet_details(s)
 
-            progress("Reading supplier pages for price data", 50)
-            fetch_attempts, fetch_failures, fetched_via = await self._fetch_and_extract(sources, builder, identity,
-                                                                                       fetcher, reader)
+            progress("Reading supplier pages for prices and contacts", 50)
+            fetch_attempts, fetch_failures, fetched_via = await self._fetch_and_extract(
+                sources, builder, identity, fetcher, reader,
+                max_pages=round(self.settings.fetch_max_pages * FETCH_SCALE[depth]))
+            contact_pages = await self._contact_pages(sources, local_businesses, fetcher, CONTACT_PAGES[depth])
 
             if self.llm is not None:
                 progress("AI is reading page text (every extracted fact is checked against the source)", 70)
@@ -292,7 +312,7 @@ class ResearchEngine:
             else:
                 llm_summary = None
 
-            # 4. FX + analysis --------------------------------------------------------------
+            # 6. FX + analysis --------------------------------------------------------------
             progress("Converting currencies (Bank of Canada)", 82)
             fx_service = FxService(self.db, client, fallback=ai_fetcher)
             currencies = {o.currency for o in builder.offers if o.currency and o.price is not None}
@@ -300,19 +320,28 @@ class ResearchEngine:
 
             progress("Comparing offers", 90)
             credits = current_credits()
+            extra_rows = [r for r in (shopping_status, *local_status) if r]
             meta = {
-                "query": query, "depth": depth, "quantity": req.quantity, "researched_at": iso(),
+                "query": query, "depth": depth, "quantity": quantity, "researched_at": iso(),
                 "duration_s": round(time.monotonic() - started, 1),
                 "providers": {"web": providers.web.name,
                               "shopping": providers.shopping.name if providers.shopping else None,
+                              "local": f"{providers.local.name} (Google Maps)" if providers.local else None,
                               "llm": self.settings.anthropic_model if self.llm is not None else None,
                               "fx": "Bank of Canada Valet",
                               "fetch_fallback": VIA if ai_fetcher is not None else None},
-                "queries": [asdict(p) for p in plan] + ([{"query": shopping_status["query"], "purpose": "shopping",
-                                                           "country": "ca", "status": shopping_status["status"],
-                                                           "result_count": shopping_status.get("result_count", 0),
-                                                           "error": shopping_status.get("error"),
-                                                           "provider": "SerpApi"}] if shopping_status else []),
+                "queries": [asdict(p) for p in all_plan] + extra_rows,
+                "plan": {"category": category.key, "category_label": category.label,
+                         "high_risk": category.high_risk, "rounds": round_log, "stop_reason": stop_reason,
+                         "deepened": deepened, "alt_names": alt_names, "used_ok": req.used_ok,
+                         "channels": disc.channel_table(category, req.used_ok), "home": disc.HOME["city"],
+                         "local_search": ("Google Maps via SerpApi" if providers.local else
+                                          "not available (needs a SerpApi key); local suppliers were searched on "
+                                          "the web only")},
+                "local_businesses": local_dicts,
+                "contact_pages": contact_pages,
+                "answers": dict(req.answers),
+                "assumptions": list(req.assumptions),
                 "credits": credits,
                 "cost_estimate": {"usd": estimate_usd(credits), "prices_checked": PRICES_CHECKED,
                                   "note": "Anthropic charges estimated from reported usage at list prices"},
@@ -382,7 +411,9 @@ class ResearchEngine:
                          reference_url=url, notes=notes)
         return ident, fr
 
-    async def _search_all(self, providers: ProviderSet, plan: list[PlannedQuery], cfg: dict[str, Any]) -> list[SearchHit]:
+    async def _search_all(self, providers: ProviderSet, plan: list[PlannedQuery], cfg: dict[str, Any],
+                          required: bool = True) -> list[SearchHit]:
+        """Run one round's searches. With `required`, a round where every search failed stops the research."""
         sem = asyncio.Semaphore(4)
         fatal: list[ProviderError] = []
         include_raw = self.llm is not None
@@ -396,8 +427,10 @@ class ResearchEngine:
                 try:
                     res = await providers.web.search(pq.query, purpose=pq.purpose, max_results=cfg["max_results"],
                                                      depth=cfg["search_depth"], country=pq.country,
-                                                     include_raw=include_raw)
+                                                     include_raw=include_raw, domains=pq.domains)
                     pq.status, pq.result_count = "ok", len(res)
+                    for h in res:
+                        h.channel, h.market, h.round = pq.channel, pq.market, pq.round
                     return res
                 except ProviderError as exc:
                     pq.status, pq.error = "failed", exc.to_dict()
@@ -407,7 +440,7 @@ class ResearchEngine:
 
         results = await asyncio.gather(*(one(pq) for pq in plan))
         hits = [h for r in results for h in r]
-        if not any(pq.status == "ok" for pq in plan):
+        if required and not any(pq.status == "ok" for pq in plan):
             errs = [pq.error for pq in plan if pq.error]
             first = fatal[0] if fatal else None
             msg = first.user_message if first else (errs[0]["message"] if errs else "all searches failed")
@@ -416,17 +449,110 @@ class ResearchEngine:
             raise ResearchError(f"Search failed: {msg}", kind=kind, details=errs)
         return hits
 
+    @staticmethod
+    async def _shopping(providers: ProviderSet, name: str) -> tuple[list[ShoppingListing], dict[str, Any] | None]:
+        if providers.shopping is None:
+            return [], None
+        row = {"query": name, "purpose": "shopping", "channel": "retail", "market": "canada", "round": 1,
+               "country": "ca", "provider": "SerpApi (Google Shopping)", "domains": None, "lead": None}
+        try:
+            listings = await providers.shopping.shopping(name)
+            return listings, {**row, "status": "ok", "result_count": len(listings), "error": None}
+        except ProviderError as exc:
+            return [], {**row, "status": "failed", "result_count": 0, "error": exc.to_dict()}
+
+    @staticmethod
+    async def _local(providers: ProviderSet, queries: list[str]) -> tuple[list[LocalBusiness], list[dict[str, Any]]]:
+        """Businesses near Thunder Bay from Google Maps (SerpApi). Listing fields are kept as shown."""
+        if providers.local is None or not queries:
+            return [], []
+
+        async def one(q: str) -> tuple[list[LocalBusiness], dict[str, Any]]:
+            row = {"query": q, "purpose": "local_map", "channel": "local_suppliers", "market": "local", "round": 1,
+                   "country": "canada", "provider": "SerpApi (Google Maps)", "domains": None, "lead": None}
+            try:
+                found = await providers.local.local(q, disc.HOME["maps_ll"])
+                return found, {**row, "status": "ok", "result_count": len(found), "error": None}
+            except ProviderError as exc:
+                return [], {**row, "status": "failed", "result_count": 0, "error": exc.to_dict()}
+
+        out = await asyncio.gather(*(one(q) for q in queries))
+        seen: set[tuple[str, str]] = set()
+        businesses: list[LocalBusiness] = []
+        now = iso()
+        for found, _ in out:
+            for b in found:
+                key = (re.sub(r"\W+", "", b.name.lower()), re.sub(r"\W+", "", (b.address or "").lower()))
+                if key not in seen:
+                    seen.add(key)
+                    b.retrieved_at = now
+                    businesses.append(b)
+        return businesses, [row for _, row in out]
+
+    async def _contact_pages(self, sources: list[Source], businesses: list[LocalBusiness], fetcher: PageFetcher,
+                             limit: int) -> list[dict[str, Any]]:
+        """Read the own websites of local and regional suppliers that have no email address yet (home page, then
+        its contact page) for phone numbers, emails and addresses. robots.txt is respected by the fetcher."""
+        if not self.settings.fetch_pages or limit <= 0:
+            return []
+        with_email = {s.domain for s in sources if s.contacts and s.contacts.get("emails")}
+        targets: list[tuple[str, str, str]] = []  # (domain, name, url)
+        for b in businesses:
+            if b.website:
+                dom = domain_of(b.website)
+                if dom and dom not in with_email and not _is_platform(dom):
+                    targets.append((dom, b.name, b.website))
+        for s in sources:
+            near = (s.location or {}).get("tier") in ("local", "regional") or "local" in s.markets
+            if near and is_seller_source(s) and s.domain not in with_email and not _is_platform(s.domain):
+                targets.append((s.domain, s.name, f"https://{s.domain}/"))
+        picked, seen = [], set()
+        for t in targets:
+            if t[0] not in seen:
+                seen.add(t[0])
+                picked.append(t)
+        pages_left = [limit]
+        sem = asyncio.Semaphore(4)
+
+        async def one(dom: str, name: str, url: str) -> dict[str, Any] | None:
+            async with sem:
+                if pages_left[0] <= 0:
+                    return None
+                pages_left[0] -= 1
+                fr = await fetcher.fetch(url)
+                entry = {"domain": dom, "name": name, "url": url, "ok": fr.ok, "error": fr.error,
+                         "fetched_at": fr.fetched_at, "phones": [], "emails": [], "addresses": []}
+                if not (fr.ok and fr.html):
+                    return entry
+                found = ex.contacts_in_html(fr.html)
+                link = ex.contact_link(fr.html, url) if not found["emails"] else None
+                if link and pages_left[0] > 0:
+                    pages_left[0] -= 1
+                    fr2 = await fetcher.fetch(link)
+                    if fr2.ok and fr2.html:
+                        more = ex.contacts_in_html(fr2.html)
+                        entry["contact_url"] = link
+                        for k in found:
+                            found[k] = list(dict.fromkeys(more[k] + found[k]))[:3]
+                entry.update(found)
+                return entry
+
+        out = await asyncio.gather(*(one(*t) for t in picked))
+        return [e for e in out if e is not None]
+
     async def _fetch_and_extract(self, sources: list[Source], builder: OfferBuilder, identity: Identity,
-                                 fetcher: PageFetcher, reader: AnthropicPageReader | None = None
-                                 ) -> tuple[int, int, int]:
+                                 fetcher: PageFetcher, reader: AnthropicPageReader | None = None,
+                                 max_pages: int | None = None) -> tuple[int, int, int]:
         sellers = [s for s in sources if is_seller_source(s) and "input_url" not in s.purposes
                    and "shopping" not in s.purposes]
-        def priority(s: Source) -> tuple[int, int, int]:
+        def priority(s: Source) -> tuple[int, int, int, int]:
             exact = ex.match_offer(identity.model_tokens, f"{s.title} {s.snippet}").level == "exact"
+            local = (s.location or {}).get("tier") == "local" or "local" in s.markets
             preferred = s.type in (DISTRIBUTOR, RETAILER, MANUFACTURER, B2B_MARKETPLACE)
-            return (0 if exact else 1, 0 if preferred else 1, int(s.id[1:]))
+            return (0 if exact else 1, 0 if local else 1, 0 if preferred else 1, int(s.id[1:]))
         ordered = sorted(sellers, key=priority)
-        to_fetch = ordered[: self.settings.fetch_max_pages] if self.settings.fetch_pages else []
+        limit = max_pages if max_pages is not None else self.settings.fetch_max_pages
+        to_fetch = ordered[:limit] if self.settings.fetch_pages else []
         sem = asyncio.Semaphore(5)
 
         async def go(s: Source):
@@ -441,6 +567,7 @@ class ResearchEngine:
                        "structured": False}
             if fr.ok and fr.html:
                 s.page_text = ex.page_text(fr.html, 15000)
+                _page_details(s, fr.html, fr.fetched_at)
                 found = builder.from_structured(s, ex.structured_products(fr.html), identity.model_tokens,
                                                 fr.fetched_at)
                 s.fetch["structured"] = found
@@ -487,6 +614,76 @@ class ResearchEngine:
                 continue
             out.append((s, FetchResult(s.url, False, None, None, err, iso(), via=VIA)))
         return out
+
+
+async def _gather_or_raise(*aws: Awaitable[Any]) -> list[Any]:
+    """Run together; if one fails, let the others finish (they share the HTTP client) and then raise."""
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            raise r
+    return results
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(value or ""))
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def _seller_domains(sources: list[Source]) -> set[str]:
+    return {s.domain for s in sources if is_seller_source(s)}
+
+
+def _snippet_prices(sources: list[Source]) -> set[tuple[str, float]]:
+    return {(s.domain, round(p.amount, 2)) for s in sources if is_seller_source(s)
+            for p in ex.find_prices(s.snippet or "")[:2]}
+
+
+def _round_entry(rno: int, plan: list[PlannedQuery], hits: list[SearchHit], new_domains: set[str],
+                 new_prices: set[tuple[str, float]], sources: list[Source]) -> dict[str, Any]:
+    if rno == 1:
+        new_domains, new_prices = _seller_domains(sources), _snippet_prices(sources)
+    return {"round": rno, "searches": len(plan), "ok": sum(1 for pq in plan if pq.status == "ok"),
+            "failed": sum(1 for pq in plan if pq.status == "failed"), "results": len(hits),
+            "new_suppliers": sorted(new_domains)[:25], "new_supplier_count": len(new_domains),
+            "new_prices": len(new_prices), "leads": [pq.lead for pq in plan if pq.lead]}
+
+
+def _is_platform(domain: str) -> bool:
+    """Marketplaces, directories and social sites: their contact details aren't the seller's."""
+    from .suppliers import BUSINESS_DIRECTORY, MARKETPLACE as MKT, _lookup
+    info = _lookup(domain)
+    return bool(info and info.type in (MKT, BUSINESS_DIRECTORY)) or domain.endswith(
+        ("facebook.com", "google.com", "google.ca", "instagram.com", "linkedin.com"))
+
+
+def _snippet_details(s: Source) -> None:
+    """Contacts, location and marketplace badges written in a search result's own title and snippet."""
+    text = f"{s.title}. {s.snippet}"
+    found = ex.contacts_in_text(s.snippet or "")
+    if any(found.values()) and not s.contacts:
+        s.contacts = {**found, "basis": "search result text", "seen_at": s.retrieved_at, "url": s.url}
+    if s.location is None:
+        if found["addresses"]:
+            tier, basis = ex.location_tier(found["addresses"][0], disc.HOME["city"])
+            if tier:
+                s.location = {"tier": tier, "basis": f"{basis} (search result text)"}
+        elif disc.HOME["city"].lower() in text.lower():
+            s.location = {"tier": "local", "basis": f"search result mentions {disc.HOME['city']}"}
+    s.badges = list(dict.fromkeys(s.badges + ex.badges(text)))[:3]
+
+
+def _page_details(s: Source, html: str, fetched_at: str) -> None:
+    found = ex.contacts_in_html(html)
+    if any(found.values()):
+        s.contacts = {**found, "basis": "the supplier's own page", "seen_at": fetched_at, "url": s.url}
+        if found["addresses"]:
+            tier, basis = ex.location_tier(" ; ".join(found["addresses"]), disc.HOME["city"])
+            if tier:
+                s.location = {"tier": tier, "basis": f"{basis} on the supplier's page"}
+    s.badges = list(dict.fromkeys(s.badges + ex.badges(f"{s.title}. {(s.page_text or '')[:3000]}")))[:3]
 
 
 def dedupe_snippet_offers(offers: list[Offer], structured_source_ids: set[str]) -> None:
@@ -595,7 +792,8 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
         offers.append(Offer(**{k: v for k, v in o.items() if k in Offer.__dataclass_fields__}))
     fx = {cur: FxRate(**r) for cur, r in (result.get("fx") or {}).items()}
     meta_keys = ["query", "depth", "quantity", "researched_at", "duration_s", "providers", "queries", "credits",
-                 "cost_estimate", "fetch", "fx_errors"]
+                 "cost_estimate", "fetch", "fx_errors", "plan", "local_businesses", "contact_pages", "answers",
+                 "assumptions"]
     meta = {k: result.get(k) for k in meta_keys}
     if quantity is not None:
         meta["quantity"] = quantity or None

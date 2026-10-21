@@ -14,11 +14,11 @@ import httpx
 
 from ..config import Settings
 from .anthropic_search import AnthropicSearchProvider
-from .base import ProviderError, SearchHit, ShoppingListing
+from .base import LocalBusiness, ProviderError, SearchHit, ShoppingListing
 from .serpapi import SerpApiProvider
 from .tavily import TavilyProvider
 
-__all__ = ["ProviderError", "SearchHit", "ShoppingListing", "ProviderSet", "build_providers",
+__all__ = ["ProviderError", "SearchHit", "ShoppingListing", "LocalBusiness", "ProviderSet", "build_providers",
            "provider_status", "SETUP_INSTRUCTIONS"]
 
 SETUP_INSTRUCTIONS = {
@@ -40,6 +40,11 @@ class ProviderSet:
     web: Any | None
     shopping: SerpApiProvider | None
     tavily: TavilyProvider | None
+
+    @property
+    def local(self) -> SerpApiProvider | None:
+        """Map listings of local businesses (Google Maps via SerpApi), when a SerpApi key is set."""
+        return self.shopping
 
     def credits(self) -> dict[str, Any]:
         out: dict[str, Any] = {}

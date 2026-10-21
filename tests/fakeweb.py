@@ -81,7 +81,9 @@ class FakeWeb:
     tavily_fail_purposes: set[str] = field(default_factory=set)
     tavily_timeout: bool = False
     tavily_results: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: json.loads(json.dumps(DEFAULT_RESULTS)))
-    serp_body: Any = None
+    serp_body: Any = None           # Google Shopping (and Google web search unless serp_web_body is set)
+    serp_maps_body: Any = None      # Google Maps local results
+    serp_web_body: Any = None
     serp_status: int = 200
     fx_ok: bool = True
     fx_rate: str = "1.3800"
@@ -107,13 +109,29 @@ class FakeWeb:
             }
 
     def purpose_of(self, query: str) -> str:
+        """Which fixture set a query gets, from its wording (the research plan's phrasing)."""
         q = query.lower()
-        for purpose, needle in (("suppliers", "supplier distributor"), ("wholesale", "wholesale"),
-                                ("issues", "problems"), ("specs", "specifications"), ("reviews", " review"),
-                                ("alternatives", "alternative"), ("cross_border", "usd"), ("price", " price")):
+        if " site:" in q:
+            return "site"  # SerpApi site-restricted search: answered from all fixture sets, filtered by site
+        for purpose, needle in (("wholesale", "trade account"), ("other", "wholesale manufacturer"),
+                                ("wholesale", "wholesale"), ("issues", "problems"), ("specs", "specifications"),
+                                ("reviews", " review"), ("alternatives", "alternative"), ("cross_border", "usd"),
+                                ("suppliers", "supplier distributor"), ("suppliers", "distributor canada"), ("suppliers", " supplier "),
+                                ("price", " price")):
             if needle in q:
                 return purpose
         return "other"
+
+    def site_results(self, domains: list[str]) -> list[dict[str, Any]]:
+        """A site-restricted search: every fixture result on those sites (as a real include_domains search)."""
+        out, seen = [], set()
+        for rows in self.tavily_results.values():
+            for r in rows:
+                host = (urlparse(r["url"]).hostname or "").removeprefix("www.")
+                if any(host == d or host.endswith("." + d) for d in domains) and r["url"] not in seen:
+                    seen.add(r["url"])
+                    out.append(r)
+        return out
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -136,12 +154,20 @@ class FakeWeb:
                 return httpx.Response(self.tavily_status, json={"detail": {"error": "simulated failure"}})
             if self.tavily_body is not None:
                 return httpx.Response(200, json=self.tavily_body)
-            return httpx.Response(200, json={"query": body["query"], "results": self.tavily_results.get(purpose, []),
-                                             "response_time": 0.5})
+            if body.get("include_domains"):
+                results = self.site_results(body["include_domains"])
+            else:
+                results = self.tavily_results.get(purpose, [])
+            return httpx.Response(200, json={"query": body["query"], "results": results, "response_time": 0.5})
         if host == "serpapi.com":
             if self.serp_body is None:
                 return httpx.Response(401, json={"error": "Invalid API key."})
-            return httpx.Response(self.serp_status, json=self.serp_body)
+            engine = parse_qs(urlparse(url).query).get("engine", [""])[0]
+            if engine == "google_maps":
+                return httpx.Response(self.serp_status, json=self.serp_maps_body or {"local_results": []})
+            if engine == "google_shopping":
+                return httpx.Response(self.serp_status, json=self.serp_body)
+            return httpx.Response(self.serp_status, json=self.serp_web_body or self.serp_body)
         if host == "www.bankofcanada.ca":
             if not self.fx_ok:
                 return httpx.Response(503, text="unavailable")

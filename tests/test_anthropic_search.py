@@ -166,6 +166,7 @@ def test_end_to_end_with_anthropic_search_only(tmp_path):
         res = c.get(f"/api/comparisons/{job['comparison_id']}").json()["result"]
         assert res["providers"]["web"] == "Anthropic web search"
         assert not any("api.tavily.com" in call for call in fw.calls)
-        assert res["credits"]["anthropic_web_searches"] == 3
+        # one billed web search per planned search (the stub reports one each)
+        assert res["credits"]["anthropic_web_searches"] == len(res["queries"]) >= 8
         kms = [o for o in res["offers"] if o["supplier"] == "KMS Tools"]
         assert kms and kms[0]["price"] in (339.99, 349.99)   # page data (fake page) or the cited snippet

@@ -80,7 +80,8 @@ class AnthropicSearchProvider:
             raise ProviderError(self.name, "network", "cannot reach api.anthropic.com (check firewall)") from exc
 
     async def search(self, query: str, *, purpose: str, max_results: int = 8, depth: str = "basic",
-                     country: str | None = None, include_raw: bool = False) -> list[SearchHit]:
+                     country: str | None = None, include_raw: bool = False,
+                     domains: list[str] | None = None) -> list[SearchHit]:
         # The basic tool version on purpose: with web_search_20260209 (dynamic filtering) the search runs
         # inside code execution and the answer carries no citations, so there is no verbatim page text to
         # use as evidence. web_search_20250305 returns citations with cited_text (verified live 2026-10-20).
@@ -88,6 +89,8 @@ class AnthropicSearchProvider:
                                 "max_uses": 2 if depth == "advanced" else 1}
         if country == "canada":
             tool["user_location"] = THUNDER_BAY
+        if domains:
+            tool["allowed_domains"] = list(domains)[:20]
         messages: list[dict[str, Any]] = [{"role": "user", "content": PROMPT.format(query=query)}]
         kwargs: dict[str, Any] = dict(model=self.model, max_tokens=8000, tools=[tool], messages=messages,
                                       output_config={"effort": self.effort})

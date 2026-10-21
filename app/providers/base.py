@@ -58,6 +58,10 @@ class SearchHit:
     raw_content: str | None = None
     score: float | None = None
     published_date: str | None = None
+    # set by the research plan: buying channel, market and round of the search that found it
+    channel: str | None = None
+    market: str | None = None
+    round: int = 1
 
 
 @dataclass
@@ -82,7 +86,23 @@ class WebSearchProvider(Protocol):
     credits_used: float
 
     async def search(self, query: str, *, purpose: str, max_results: int, depth: str,
-                     country: str | None, include_raw: bool) -> list[SearchHit]: ...
+                     country: str | None, include_raw: bool, domains: list[str] | None = None) -> list[SearchHit]: ...
+
+
+@dataclass
+class LocalBusiness:
+    """A business from a map listing (Google Maps via SerpApi). Fields are as the listing shows them."""
+    name: str
+    address: str | None
+    phone: str | None
+    website: str | None
+    category: str | None
+    rating: float | None
+    reviews: int | None
+    listing_url: str | None
+    query: str
+    provider: str
+    retrieved_at: str = ""
 
 
 class ShoppingProvider(Protocol):

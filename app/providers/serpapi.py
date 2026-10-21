@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from .base import ProviderError, SearchHit, ShoppingListing, classify_http_error
+from .base import LocalBusiness, ProviderError, SearchHit, ShoppingListing, classify_http_error
 
 log = logging.getLogger(__name__)
 
@@ -94,8 +94,36 @@ class SerpApiProvider:
             ))
         return out
 
+    async def local(self, query: str, ll: str) -> list[LocalBusiness]:
+        """Businesses from Google Maps around `ll` ("@lat,lon,zoomz"). Fields are copied as the listing shows them."""
+        data = await self._get({"engine": "google_maps", "type": "search", "q": query, "ll": ll})
+        rows = data.get("local_results")
+        if not isinstance(rows, list):
+            place = data.get("place_results")  # a single exact match comes back as one place
+            rows = [place] if isinstance(place, dict) else []
+        out: list[LocalBusiness] = []
+        for r in rows:
+            if not isinstance(r, dict) or not r.get("title"):
+                continue
+            rating = r.get("rating")
+            reviews = r.get("reviews")
+            cid = r.get("data_cid")
+            out.append(LocalBusiness(
+                name=str(r["title"]), address=r.get("address") if isinstance(r.get("address"), str) else None,
+                phone=r.get("phone") if isinstance(r.get("phone"), str) else None,
+                website=r.get("website") if isinstance(r.get("website"), str) else None,
+                category=r.get("type") if isinstance(r.get("type"), str) else None,
+                rating=float(rating) if isinstance(rating, (int, float)) else None,
+                reviews=int(reviews) if isinstance(reviews, (int, float)) else None,
+                listing_url=f"https://www.google.com/maps?cid={cid}" if cid else None,
+                query=query, provider=f"{self.name} (Google Maps)"))
+        return out
+
     async def search(self, query: str, *, purpose: str, max_results: int = 8, depth: str = "basic",
-                     country: str | None = None, include_raw: bool = False) -> list[SearchHit]:
+                     country: str | None = None, include_raw: bool = False,
+                     domains: list[str] | None = None) -> list[SearchHit]:
+        if domains:
+            query = f"{query} " + " OR ".join(f"site:{d}" for d in domains[:6])
         params = {"engine": "google", "q": query, "num": max(1, min(max_results, 20))}
         try:
             data = await self._get(params)

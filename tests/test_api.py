@@ -1,6 +1,7 @@
 """End-to-end API workflow against the simulated web (tests only)."""
 
 import io
+import re
 import time
 
 import pytest
@@ -237,13 +238,20 @@ def test_delete_and_404s(tmp_path):
         assert c.post("/api/research", json={"query": ""}).status_code == 422
 
 
-@pytest.mark.parametrize("depth,expected", [("quick", 3), ("standard", 6), ("deep", 8)])
-def test_depth_controls_query_count(tmp_path, depth, expected):
+@pytest.mark.parametrize("depth", ["quick", "standard", "deep"])
+def test_depth_controls_query_count(tmp_path, depth):
+    from app.discovery import DEPTH_BUDGET
+    budget = DEPTH_BUDGET[depth]["rounds"]
     with make_client(tmp_path) as c:
         res = c.get(f"/api/comparisons/{research(c, depth=depth)['comparison_id']}").json()["result"]
-        assert len(res["queries"]) == expected
+        first = [q for q in res["queries"] if q["round"] == 1]
+        assert len(first) == budget[0]
+        assert first[0]["market"] == "local" and "Thunder Bay" in first[0]["query"]  # local first
+        assert len(res["queries"]) <= sum(budget)
         per = 2 if depth == "deep" else 1
-        assert res["credits"]["tavily_credits"] == expected * per
+        assert res["credits"]["tavily_credits"] == len(res["queries"]) * per
+        assert res["plan"]["rounds"][0]["searches"] == budget[0]
+        assert res["plan"]["stop_reason"]
 
 
 def test_ai_layer_integration_with_verification(tmp_path):
@@ -263,21 +271,25 @@ def test_ai_layer_integration_with_verification(tmp_path):
             if "search_queries" in schema["properties"]:
                 payload = {"product_summary": "torque widget", "brand": "Acme", "category": "hand tools",
                            "key_specs": ["drive size", "max torque"],
-                           "search_queries": ["Acme TX-4400 Thunder Bay distributor"]}
+                           "search_queries": ["Acme TX-4400 Thunder Bay distributor"], "alternative_names": []}
             else:
+                prompt = kw["messages"][0]["content"]
+                ids = dict(re.findall(r'<source id="(S\d+)" type="[^"]*" url="https://www\.([a-z]+)\.', prompt))
+                by_site = {v: k for k, v in ids.items()}
                 payload = {
                     "offers": [
                         # Tenaquip page text has no price -> this invented price must be rejected
-                        {"source_id": "S5", "product_title": "Acme TX-4400", "supplier_name": "Tenaquip",
+                        {"source_id": by_site["tenaquip"], "product_title": "Acme TX-4400", "supplier_name": "Tenaquip",
                          "price_text": "$310.00", "currency_stated": "CAD", "pack_quantity": 0,
                          "condition": "new", "evidence_quote": "Acme TX-4400 $310.00", "shipping_text": "",
                          "warranty": "", "moq": "", "availability": ""}],
                     "quality": {
-                        "praise": [{"point": "Reviewers call it well-built and reliable", "source_ids": ["S8"],
+                        "praise": [{"point": "Reviewers call it well-built and reliable", "source_ids": [by_site["protoolreviews"]],
                                     "quotes": ["well-built and reliable in our testing"]}],
-                        "criticism": [{"point": "Clutch can overheat in continuous use", "source_ids": ["S8"],
+                        "criticism": [{"point": "Clutch can overheat in continuous use",
+                                       "source_ids": [by_site["protoolreviews"]],
                                        "quotes": ["the clutch overheats under continuous use"]}],
-                        "reliability_issues": [{"point": "98% failure rate", "source_ids": ["S8"],
+                        "reliability_issues": [{"point": "98% failure rate", "source_ids": [by_site["protoolreviews"]],
                                                 "quotes": ["98% of units fail"]}],
                         "overall_note": "Two sources, one professional, one anecdotal."},
                     "alternatives": []}

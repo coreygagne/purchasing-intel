@@ -26,6 +26,9 @@ GOVERNMENT = "government / regulator"
 CLASSIFIEDS = "classifieds / used"
 DEALS = "deal forum (past deals)"
 SEARCH = "search results page"
+AUCTION = "auction / surplus"
+PROPERTY_SITE = "property listings"
+BUSINESS_DIRECTORY = "business directory"
 UNKNOWN = "unknown"
 
 
@@ -77,6 +80,25 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "walmart.ca": SupplierInfo("Walmart Canada", MARKETPLACE, "CA"),
     "ebay.ca": SupplierInfo("eBay Canada", MARKETPLACE, "CA"),
     "kijiji.ca": SupplierInfo("Kijiji", CLASSIFIEDS, "CA"),
+    "autotrader.ca": SupplierInfo("AutoTrader.ca", CLASSIFIEDS, "CA"),
+    "carpages.ca": SupplierInfo("CarPages.ca", CLASSIFIEDS, "CA"),
+    # Auctions, liquidation and government surplus
+    "rbauction.com": SupplierInfo("RB Global (Ritchie Bros.) auctions", AUCTION, None),
+    "ironplanet.com": SupplierInfo("IronPlanet", AUCTION, None),
+    "govdeals.ca": SupplierInfo("GovDeals Canada", AUCTION, "CA"),
+    "gcsurplus.ca": SupplierInfo("GCSurplus (Government of Canada surplus sales)", AUCTION, "CA"),
+    "govdeals.com": SupplierInfo("GovDeals", AUCTION, "US"),
+    "machinerytrader.com": SupplierInfo("Machinery Trader", CLASSIFIEDS, None),
+    "equipmenttrader.com": SupplierInfo("Equipment Trader", CLASSIFIEDS, "US"),
+    # Property listings
+    "realtor.ca": SupplierInfo("REALTOR.ca", PROPERTY_SITE, "CA"),
+    "spacelist.ca": SupplierInfo("Spacelist", PROPERTY_SITE, "CA"),
+    "loopnet.com": SupplierInfo("LoopNet", PROPERTY_SITE, None),
+    "remax.ca": SupplierInfo("RE/MAX Canada", PROPERTY_SITE, "CA"),
+    "royallepage.ca": SupplierInfo("Royal LePage", PROPERTY_SITE, "CA"),
+    # Business directories (they list businesses and contacts; they don't sell)
+    "yellowpages.ca": SupplierInfo("Yellow Pages Canada", BUSINESS_DIRECTORY, "CA"),
+    "canada411.ca": SupplierInfo("Canada411", BUSINESS_DIRECTORY, "CA"),
     # US distributors / retailers / marketplaces
     "grainger.com": SupplierInfo("Grainger (US)", DISTRIBUTOR, "US"),
     "mscdirect.com": SupplierInfo("MSC Industrial Supply", DISTRIBUTOR, "US"),
@@ -160,7 +182,8 @@ COUNTRY_CURRENCY = {
 }
 
 REVIEW_TYPES = {REVIEW, FORUM, VIDEO, COMPLAINTS, DEALS}
-SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN}
+SELLER_TYPES = {MANUFACTURER, DISTRIBUTOR, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, AUCTION, PROPERTY_SITE,
+                UNKNOWN}
 
 
 def domain_of(url: str) -> str:

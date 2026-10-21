@@ -47,8 +47,9 @@ PLAN_SCHEMA = {
         "category": {"type": "string"},
         "key_specs": {"type": "array", "items": {"type": "string"}},
         "search_queries": {"type": "array", "items": {"type": "string"}},
+        "alternative_names": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["product_summary", "brand", "category", "key_specs", "search_queries"],
+    "required": ["product_summary", "brand", "category", "key_specs", "search_queries", "alternative_names"],
     "additionalProperties": False,
 }
 
@@ -268,12 +269,17 @@ class ClaudeAnalyst:
             f"Purchasing request ({input_type}): <request>{request}</request>\n\n"
             "Return: a one-line product_summary; brand only if the request names one (else empty); a short "
             "category; up to 6 key_specs that decide whether two listings are equivalent (spec names, with values "
-            "only if the request states them); and up to 3 extra web search_queries that would find Canadian "
-            "suppliers, distributors or equivalent products for this item. Do not add model numbers that are not "
-            "in the request."
+            "only if the request states them); up to 3 extra web search_queries that would find Canadian "
+            "suppliers, distributors or equivalent products for this item; and up to 3 alternative_names the trade "
+            "uses for the same item (other spellings, trade or catalogue names). Do not add model numbers that are "
+            "not in the request."
         )
         data, usage = await self._call(user, PLAN_SCHEMA, 4000)  # room for thinking; billed only if used
         data["search_queries"] = [q.strip()[:200] for q in data.get("search_queries", []) if q.strip()][:3]
+        # search terms only (never evidence); kept short and free of model numbers the request doesn't have
+        data["alternative_names"] = [a.strip()[:100] for a in data.get("alternative_names", []) or []
+                                     if a.strip() and a.strip().lower() != request.strip().lower()
+                                     and set(ex.model_tokens(a)) <= set(ex.model_tokens(request))][:3]
         data["key_specs"] = [k.strip()[:120] for k in data.get("key_specs", []) if k.strip()][:6]
         data["_usage"] = usage
         return data

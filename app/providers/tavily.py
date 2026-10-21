@@ -70,7 +70,8 @@ class TavilyProvider:
         return data
 
     async def search(self, query: str, *, purpose: str, max_results: int = 8, depth: str = "basic",
-                     country: str | None = None, include_raw: bool = False) -> list[SearchHit]:
+                     country: str | None = None, include_raw: bool = False,
+                     domains: list[str] | None = None) -> list[SearchHit]:
         body: dict[str, Any] = {
             "query": query,
             "search_depth": "advanced" if depth == "advanced" else "basic",
@@ -83,6 +84,8 @@ class TavilyProvider:
         }
         if country:
             body["country"] = country
+        if domains:
+            body["include_domains"] = list(domains)[:20]
         try:
             data = await self._post(SEARCH_URL, body)
         except ProviderError as exc:

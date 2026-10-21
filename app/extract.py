@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -1016,3 +1016,155 @@ def focus_text(text: str, tokens: list[str], limit: int) -> str:
     priced = next((i for i in mentions if find_prices(text[i:i + 1500])), mentions[0])
     start = max(0, priced - limit // 5)
     return text[start:start + limit]
+
+
+# ------------------------------------------------------------------ contacts
+# Contact details are copied from the business's own page (tel:/mailto: links, schema.org business data, page
+# text) or from a map/directory listing, always with where they were seen. Nothing is inferred.
+
+_PHONE = re.compile(r"(?<![\d\w-])(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?([2-9]\d{2})[\s.-]?(\d{4})(?![\d-])")
+_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
+_POSTAL = re.compile(r"\b([ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z])[ -]?(\d[ABCEGHJ-NPRSTV-Z]\d)\b")
+_US_ZIP = re.compile(r"\b(A[KLRZ]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|"
+                     r"T[NX]|UT|V[AT]|W[AIVY])\s+\d{5}(?:-\d{4})?\b")
+_BAD_EMAIL_END = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js")
+
+
+def _phone_fmt(m: re.Match) -> str:
+    return f"({m.group(1)}) {m.group(2)}-{m.group(3)}"
+
+
+def contacts_in_text(text: str, limit: int = 3) -> dict[str, list[str]]:
+    """Phone numbers, emails and postal-code addresses written in `text`."""
+    text = text or ""
+    phones = list(dict.fromkeys(_phone_fmt(m) for m in _PHONE.finditer(text)))[:limit]
+    emails = [e for e in dict.fromkeys(m.group(0) for m in _EMAIL.finditer(text))
+              if not e.lower().endswith(_BAD_EMAIL_END) and "example." not in e.lower()][:limit]
+    addresses = []
+    for m in _POSTAL.finditer(text):
+        start = max(0, m.start() - 70)
+        chunk = re.sub(r"\s+", " ", text[start:m.end()]).strip(" ,|")
+        chunk = re.split(r"[|•·]", chunk)[-1].strip()
+        addresses.append(chunk)
+    return {"phones": phones, "emails": emails, "addresses": list(dict.fromkeys(addresses))[:limit]}
+
+
+def contacts_in_html(html: str) -> dict[str, list[str]]:
+    """Contacts on a business's own page: tel:/mailto: links and schema.org data first, then the page text
+    (including the header and footer, where contact details usually are)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    phones, emails, addresses = [], [], []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if href.lower().startswith("tel:"):
+            m = _PHONE.search(href[4:])
+            if m:
+                phones.append(_phone_fmt(m))
+        elif href.lower().startswith("mailto:"):
+            addr = href[7:].split("?")[0].strip()
+            if _EMAIL.fullmatch(addr):
+                emails.append(addr)
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or "")
+        except (ValueError, TypeError):
+            continue
+        for node in _ld_nodes(data):
+            if not isinstance(node, dict):
+                continue
+            tel, mail, adr = node.get("telephone"), node.get("email"), node.get("address")
+            if isinstance(tel, str) and _PHONE.search(tel):
+                phones.append(_phone_fmt(_PHONE.search(tel)))
+            if isinstance(mail, str) and _EMAIL.search(mail):
+                emails.append(_EMAIL.search(mail).group(0))
+            if isinstance(adr, dict):
+                parts = [adr.get(k) for k in ("streetAddress", "addressLocality", "addressRegion", "postalCode")]
+                line = ", ".join(str(x).strip() for x in parts if isinstance(x, str) and x.strip())
+                if line:
+                    addresses.append(line)
+            elif isinstance(adr, str) and adr.strip():
+                addresses.append(adr.strip())
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+    found = contacts_in_text(soup.get_text(" ", strip=True))
+    return {"phones": list(dict.fromkeys(phones + found["phones"]))[:3],
+            "emails": list(dict.fromkeys(e for e in emails + found["emails"]
+                                         if not e.lower().endswith(_BAD_EMAIL_END)))[:3],
+            "addresses": list(dict.fromkeys(addresses + found["addresses"]))[:3]}
+
+
+def _ld_nodes(data: Any) -> Iterable[Any]:
+    if isinstance(data, list):
+        for d in data:
+            yield from _ld_nodes(d)
+    elif isinstance(data, dict):
+        yield data
+        for key in ("@graph", "location", "seller", "provider", "publisher"):
+            if key in data:
+                yield from _ld_nodes(data[key])
+
+
+def location_tier(text: str | None, home_city: str = "Thunder Bay") -> tuple[str | None, str | None]:
+    """(market tier, what it was based on) from an address or location text: local (home city or P7 postal
+    code), regional (rest of Northern Ontario and Ontario), canada, us; None when nothing locates it."""
+    t = text or ""
+    if not t.strip():
+        return None, None
+    m = _POSTAL.search(t.upper())
+    if home_city.lower() in t.lower() or (m and m.group(1).startswith("P7")):
+        return "local", f"address in {home_city}"
+    if m:
+        first = m.group(1)[0]
+        if first in "PKLMN":
+            return "regional", "Ontario postal code"
+        return "canada", "Canadian postal code"
+    if re.search(r"\b(ON|Ontario)\b", t):
+        return "regional", "Ontario address"
+    if re.search(r"\b(AB|BC|MB|NB|NL|NS|NT|NU|PE|QC|SK|YT|Alberta|British Columbia|Manitoba|Quebec|Québec|"
+                 r"Saskatchewan|Nova Scotia|New Brunswick)\b", t):
+        return "canada", "Canadian address"
+    if _US_ZIP.search(t):
+        return "us", "US address"
+    return None, None
+
+
+# ------------------------------------------------------- price kinds, badges
+_COMPLETED_SALE = re.compile(r"\bsold\s+(?:for|at)\b|\bsold\s+price\b|\bsold\s+(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|"
+                             r"aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}|\b(?:winning|final|high(?:est)?)\s+bid\b|"
+                             r"\bhammer\s+price\b|\bprice\s+realized\b|\bsold\s*:\s*\$", re.I)
+_CURRENT_BID = re.compile(r"\bcurrent\s+bid\b|\bbid\s+now\b|\bstarting\s+bid\b|\bopening\s+bid\b|\bbids?\s*:\s*\d",
+                          re.I)
+_BADGES = re.compile(r"amazon'?s\s+choice|#?1\s+best\s+seller|\bbest\s+seller\b|top\s+rated(?:\s+(?:plus|seller))?|"
+                     r"verified\s+supplier|gold\s+supplier|trade\s+assurance|overall\s+pick|top\s+brand|"
+                     r"verified\s+seller", re.I)
+
+
+def price_kind(text: str, start: int = 0, end: int | None = None) -> str:
+    """'completed_sale', 'current_bid' or 'asking' for a price at text[start:end] (looks 80 chars around it)."""
+    end = len(text or "") if end is None else end
+    window = (text or "")[max(0, start - 80): end + 80]
+    if _COMPLETED_SALE.search(window):
+        return "completed_sale"
+    if _CURRENT_BID.search(window):
+        return "current_bid"
+    return "asking"
+
+
+def badges(text: str) -> list[str]:
+    """Marketplace badges ('Amazon's Choice', 'Verified Supplier') - not proof of quality or seller identity."""
+    return list(dict.fromkeys(m.group(0).strip() for m in _BADGES.finditer(text or "")))[:3]
+
+
+def contact_link(html: str, base_url: str) -> str | None:
+    """The page's own 'Contact us' link (same site only)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    base_host = (urlparse(base_url).hostname or "").lower().removeprefix("www.")
+    for a in soup.find_all("a", href=True):
+        label = f"{a.get_text(' ', strip=True)} {a['href']}".lower()
+        if "contact" not in label:
+            continue
+        url = urljoin(base_url, a["href"].strip())
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        if url.startswith(("http://", "https://")) and host == base_host and url.rstrip("/") != base_url.rstrip("/"):
+            return url.split("#")[0]
+    return None
