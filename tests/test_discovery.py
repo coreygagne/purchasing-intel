@@ -6,6 +6,7 @@ fixtures (555-01xx numbers are reserved for fiction).
 
 from fastapi.testclient import TestClient
 
+from app import clarify as cl
 from app import discovery as disc
 from app import extract as ex
 from app.config import Settings
@@ -84,7 +85,7 @@ def test_alt_spellings_for_trade_names():
 def test_contacts_and_location_are_copied_not_inferred():
     found = ex.contacts_in_text("Gerrie Example Ltd, 99 Red River Rd, Thunder Bay, ON P7B 1A1. Tel 807.555.0199. "
                                 "Model 2767-20, part 48-11-1850")
-    assert found["phones"] == ["(807) 555-0199"]  # model numbers are not phone numbers
+    assert found["phones"] == ["807.555.0199"]  # as written; model numbers are not phone numbers
     assert found["addresses"][0].endswith("Thunder Bay, ON P7B 1A1")
     assert ex.location_tier("Winnipeg, MB R3C 0A1") == ("canada", "Canadian postal code")
     assert ex.location_tier("Dryden, ON P8N 1A1")[0] == "regional"
@@ -94,7 +95,7 @@ def test_contacts_and_location_are_copied_not_inferred():
             '"email": "info@example-supply.ca", "address": {"streetAddress": "5 Main St", "addressLocality": '
             '"Thunder Bay", "addressRegion": "ON", "postalCode": "P7A 1A1"}}</script>')
     c = ex.contacts_in_html(html)
-    assert c["phones"] == ["(807) 555-0110"] and c["emails"] == ["info@example-supply.ca"]
+    assert c["phones"] == ["+1 807 555 0110"] and c["emails"] == ["info@example-supply.ca"]
     assert c["addresses"] == ["5 Main St, Thunder Bay, ON, P7A 1A1"]
 
 
@@ -279,3 +280,121 @@ def test_comparisons_saved_before_this_version_are_reanalysed(tmp_path):
     assert new["analysis_version"] == ANALYSIS_VERSION
     assert new["vendors"] and new["coverage"]["found"]["offers"] and new["recommendation"]["lead"]
     assert new["recommendations"]["lowest"]["supplier"] == res["recommendations"]["lowest"]["supplier"]
+
+
+
+# ------------------------------------------------- review regressions (round 3)
+
+
+def test_product_names_with_property_or_vehicle_words_keep_their_category():
+    cases = {"warehouse pallet racking": "machinery", "building wire 12 AWG T90": "electrical",
+             "Generac home standby generator": "machinery", "lot of 50 galvanized shackles": "parts",
+             "Home Hardware deck screws": "parts", "electric pallet truck": "machinery", "hand truck": "tools",
+             "semi-gloss exterior paint": "consumables", "car battery charger": "tools",
+             "2019 Ford F-150 pickup": "vehicle", "used dump truck": "vehicle",
+             "warehouse space for lease": "property", "10 acres vacant land": "property"}
+    assert {q: disc.categorize(q).key for q in cases} == cases
+
+
+def test_shared_platform_websites_never_merge_businesses():
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    from app.vendors import build_vendors
+    maps = [{"name": "Northern Rigging Supply", "address": "1 Main St, Thunder Bay, ON P7B 1A1", "phone": "(807) 555-0101",
+             "website": "https://www.facebook.com/northernrigging", "category": "Rigging", "rating": 4.0, "reviews": 3,
+             "listing_url": "https://www.google.com/maps?cid=1", "retrieved_at": "2026-10-21T00:00:00+00:00"},
+            {"name": "Lakehead Safety", "address": "2 Main St, Thunder Bay, ON P7B 1A2", "phone": "(807) 555-0102",
+             "website": "https://www.facebook.com/lakeheadsafety", "category": "Safety", "rating": 4.5, "reviews": 9,
+             "listing_url": "https://www.google.com/maps?cid=2", "retrieved_at": "2026-10-21T00:00:00+00:00"}]
+    hits = [SearchHit("Tavily", "q", "local_suppliers", "https://www.facebook.com/someshop/", "Some Shop - Home | Facebook",
+                      "Some Shop, Kenora. Call 807-555-0103", 1, channel="local_suppliers", market="local"),
+            SearchHit("Tavily", "q", "local_suppliers", "https://www.facebook.com/othershop/", "Other Shop | Facebook",
+                      "Other Shop. Call 204-555-0104", 2, channel="local_suppliers", market="local")]
+    sources = build_sources(hits, [])
+    vendors = build_vendors(sources, [], maps)
+    by_name = {v["name"]: v for v in vendors}
+    assert by_name["Northern Rigging Supply"]["phones"][0]["value"] == "(807) 555-0101"
+    assert by_name["Lakehead Safety"]["phones"][0]["value"] == "(807) 555-0102"
+    assert "facebook.com" not in by_name  # the platform itself is never a supplier
+    assert {v["phones"][0]["value"] for v in vendors if v["name"] in ("Some Shop", "Other Shop")} == {
+        "807-555-0103", "204-555-0104"}
+    leads = disc.find_leads([], maps, name="x", brand=None, category=disc.CATEGORIES["general"])
+    assert not any(lead.value.endswith("facebook.com") for lead in leads)
+
+
+def test_a_mention_of_thunder_bay_does_not_make_a_seller_local():
+    from app.research import _snippet_details
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    [s] = build_sources([SearchHit("Tavily", "q", "retail", "https://shop.example.ca/x", "Widget",
+                                   "We ship across Ontario, including Thunder Bay. $20", 1)], [])
+    _snippet_details(s)
+    assert s.location["tier"] is None and s.location["mentions_home"]
+    c = ex.contacts_in_text("Next-day delivery to Thunder Bay. Head office: 200 Bay St, Toronto ON M5J 2J2")
+    assert c["addresses"] == ["200 Bay St, Toronto ON M5J 2J2"]
+    assert ex.location_tier(c["addresses"][0])[0] == "regional"
+
+
+def test_live_auction_bids_are_not_completed_sales():
+    for text in ("High Bid: $41,000. Auction closes Oct 30", "Highest bid $950 · ends in 2d", "Winning bid so far $300"):
+        assert ex.price_kind(text) == "current_bid", text
+    for text in ("Winning bid $500. Auction ended", "Sold: $260.00", "Lot closed - high bid $700"):
+        assert ex.price_kind(text) == "completed_sale", text
+    assert ex.price_kind("Final price $1,200 after discount") == "asking"
+
+
+def test_auction_site_prices_are_bids_by_default(tmp_path):
+    fw = FakeWeb()
+    fw.tavily_results["price"].append(tavily_result(
+        "https://www.govdeals.ca/asset/1", "Acme TX-4400 Torque Widget", "Acme TX-4400 torque widget $150.00"))
+    res = run(tmp_path, fw)
+    o = next(o for o in res["offers"] if "govdeals" in o["url"])
+    assert o["price_kind"] == "current_bid" and not o["comparable"]
+    v = next(v for v in res["vendors"] if v["domain"] == "govdeals.ca")
+    assert v["price_status"] == "no_price_seen" and v["sold_or_bid_prices"][0]["price_kind"] == "current_bid"
+
+
+def test_quality_themes_ignore_negations_copies_and_unrelated_mentions():
+    from app.analysis import quality_themes
+    issues = [{"quote": "Handle is too short", "domain": "reddit.com", "url": "u1"},
+              {"quote": "Paint scratches off easily", "domain": "homedepot.ca", "url": "u2"},
+              {"quote": "Mine has never failed in 3 years", "domain": "forum.example", "url": "u3"},
+              {"quote": "The motor overheats after an hour", "domain": "a.example", "url": "u4"},
+              {"quote": "The motor overheats after an hour.", "domain": "b.example", "url": "u5"}]
+    themes = quality_themes(issues, [])
+    assert [t["theme"] for t in themes] == ["Overheating"]  # no "Other" group, no negated "failure"
+    assert themes[0]["sites"] == 1 and not themes[0]["pattern"]  # syndicated copy counts once
+
+
+def test_foreign_per_foot_totals_keep_import_costs_unknown():
+    o = _offer(1, 2.0, per_length="ft", per_ft_cad=2.8, order_total_cad=840.0, country="US", currency="USD",
+               fx_rate=1.4, price_cad=2.8)
+    t = order_totals(o, None, {"text": "300 ft", "feet": 300.0}, "ON", {})
+    assert {"shipping", "duty", "surtax", "brokerage"} <= set(t["unknown"])
+    assert t["tax"]["label"] == "GST 5% at the border" and t["tax"]["value"] == 42.0
+    t2 = order_totals(_offer(2, 2.0, per_length="ft", per_ft_cad=2.0, order_total_cad=600.0), None,
+                      {"text": "300 ft", "feet": 300.0}, "ON", {"domestic_shipping_cad": 50.0})
+    assert t2["pre_tax_total"] == 650.0 and t2["complete"] and t2["label"] == "estimated"
+
+
+def test_length_answers_with_reels_or_without_units():
+    two = cl.apply_answers("300 MCM teck cable", {"length": "2 reels of 500 ft"}, None)
+    assert two["length_text"] == "1000 ft of"
+    bare = cl.apply_answers("300 MCM teck cable", {"length": "300"}, None)
+    assert bare["length_text"] is None and any("has no unit" in a for a in bare["assumptions"])
+
+
+def test_auto_deepening_applies_to_every_search_setting(tmp_path):
+    settings = Settings(tavily_api_key="tvly-test-key", serpapi_api_key="serp-test", database_path=tmp_path / "t.db")
+    with TestClient(create_app(settings, transport=local_web().transport())) as c:
+        res = c.get(f"/api/comparisons/{research(c, 'used forklift 5000 lb', depth='standard')['comparison_id']}"
+                    ).json()["result"]
+    assert res["plan"]["run_depth"] == "deep" and "higher-risk" in res["plan"]["deepened"]
+    first = [q for q in res["queries"] if q["round"] == 1 and q["purpose"] not in ("local_map", "shopping")]
+    assert disc.DEPTH_BUDGET["standard"]["rounds"][0] < len(first) <= disc.DEPTH_BUDGET["deep"]["rounds"][0]
+    assert len([q for q in res["queries"] if q["purpose"] == "local_map"]) == disc.DEPTH_BUDGET["deep"]["maps"]
+
+
+def test_phone_numbers_keep_extensions_and_dedupe_by_digits():
+    found = ex.contacts_in_text("Call 1-800-555-0199 ext. 204, or (807) 555-0142 / 807.555.0142")
+    assert found["phones"] == ["1-800-555-0199 ext. 204", "(807) 555-0142"]

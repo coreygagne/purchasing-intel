@@ -588,29 +588,40 @@ def quality_evidence(sources: list[Source], offers: list[Offer], tokens: list[st
 
 
 THEMES = [  # in priority order: each mention is counted under its first matching theme only
-    ("Safety", r"safety|hazard|injur|recall|fire|burn"),
-    ("Overheating", r"overheat|too hot|gets hot|thermal"),
-    ("Leaks", r"\bleak"),
-    ("Breakage or failure", r"\bbroke|broken|fail|died|dies|stopped working|crack|defect"),
-    ("Battery or power", r"battery|charg|power"),
-    ("Build quality", r"poor quality|junk|cheap(?:ly)? made|flimsy|well[- ]built|solid|durable|heavy[- ]duty"),
-    ("Reliability", r"reliab|long[- ]lasting|unreliable"),
-    ("Warranty and support", r"warrant|customer service|support|replac"),
-    ("Value for money", r"value|worth|price"),
+    ("Safety", r"\b(safety|hazard|injur\w*|recall\w*|fire|burns?)\b"),
+    ("Overheating", r"\b(overheat\w*|too hot|gets? (?:very )?hot|thermal)\b"),
+    ("Leaks", r"\bleak\w*"),
+    ("Breakage or failure", r"\b(broke|broken|fail(?:s|ed|ure|ures)?|died|dies|stopped working|crack(?:s|ed)?|defect\w*)\b"),
+    ("Battery or power", r"\b(batter(?:y|ies)|charg(?:e|er|es|ing)|power (?:loss|issues?|problems?)|no power|loses power)\b"),
+    ("Build quality", r"\b(poor quality|junk|cheap(?:ly)? made|flimsy|well[- ]built|solid|durable|heavy[- ]duty)\b"),
+    ("Reliability", r"\b(reliab\w*|long[- ]lasting|unreliable)\b"),
+    ("Warranty and support", r"\b(warrant\w*|customer service|support|replac\w*)\b"),
+    ("Value for money", r"\b(value|worth (?:it|the)|overpriced|price)\b"),
 ]
+# "never failed", "no leaks", "hasn't broken": praise in a problem's words
+_NEGATED = re.compile(r"\b(never|no|not|hasn'?t|haven'?t|didn'?t|doesn'?t|without|zero)\s+(?:\w+\s+){0,2}?"
+                      r"(fail\w*|broke\w*|break\w*|leak\w*|overheat\w*|crack\w*|died|die|issues?|problems?)", re.I)
 
 
 def quality_themes(issues: list[dict[str, Any]], praise: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group verbatim mentions into themes; a theme is a pattern only when 2+ independent sites mention it."""
+    """Group verbatim mentions into themes. A theme is a pattern only when two or more independent sites mention
+    it: the same text copied onto several sites counts once, and mentions that fit no theme are never grouped
+    into one."""
     compiled = [(label, re.compile(p, re.I)) for label, p in THEMES]
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for kind, mentions in (("concern", issues), ("praise", praise)):
         for m in mentions:
-            label = next((lb for lb, rx in compiled if rx.search(m["quote"])), "Other")
-            grouped[(label, kind)].append(m)
+            if kind == "concern" and _NEGATED.search(m["quote"]):
+                continue
+            label = next((lb for lb, rx in compiled if rx.search(m["quote"])), None)
+            if label:
+                grouped[(label, kind)].append(m)
     out = []
     for (label, kind), hits in grouped.items():
-        domains = sorted({m["domain"] for m in hits})
+        seen_text: dict[str, str] = {}
+        for m in hits:  # syndicated copies: the first site carrying a text is its only independent source
+            seen_text.setdefault(re.sub(r"\W+", " ", m["quote"].lower()).strip(), m["domain"])
+        domains = sorted(set(seen_text.values()))
         out.append({"theme": label, "kind": kind, "mentions": len(hits), "sites": len(domains),
                     "domains": domains, "pattern": len(domains) >= 2,
                     "label": f"recurring: {len(domains)} independent sites" if len(domains) >= 2 else

@@ -16,8 +16,8 @@ from . import extract as ex
 from .db import iso
 from .fetch import FetchResult
 from .providers.base import SearchHit, ShoppingListing
-from .suppliers import (B2B_MARKETPLACE, COUNTRY_CURRENCY, GOVERNMENT, MARKETPLACE, REVIEW_TYPES, SELLER_TYPES,
-                        UNKNOWN, classify_source, domain_of, lookup_by_name)
+from .suppliers import (AUCTION, B2B_MARKETPLACE, COUNTRY_CURRENCY, GOVERNMENT, MARKETPLACE, REVIEW_TYPES,
+                        SELLER_TYPES, UNKNOWN, classify_source, domain_of, lookup_by_name)
 
 # Searches whose results can be offers to buy. The channel names come from the research plan (discovery.py);
 # "price", "suppliers" and "cross_border" are from comparisons saved before it.
@@ -370,11 +370,15 @@ class OfferBuilder:
                              "variants or conditions).")
             else:
                 price_type = "range" if so.price_high else "listed"
+            kind = "asking"
+            if src.type == AUCTION and src.page_text and so.raw_price and so.raw_price in src.page_text:
+                kind = _price_kind_near(src.page_text, so.raw_price)
             offer = Offer(**base, **fields, price=so.price, price_high=so.price_high, currency=currency,
                           currency_basis=cbasis, price_text=so.raw_price or None, price_type=price_type,
                           price_basis="structured_data",
                           evidence_quote=f'schema.org price "{so.raw_price}" {so.currency or ""}'.strip(),
-                          is_reference=is_reference, notes=notes)
+                          is_reference=is_reference, notes=notes, price_kind=kind)
+        _auction_price(src, offer)
         offer.identifiers = {k: v for k, v in {"sku": product.sku, "mpn": product.mpn, "gtin": product.gtin,
                                                 "brand": product.brand}.items() if v}
         offer.specs = dict(product.specs)
@@ -417,6 +421,7 @@ class OfferBuilder:
                                  price_type="range" if p.is_range else "listed", price_basis="snippet",
                                  evidence_quote=_around(src.snippet or src.title, p.raw),
                                  price_kind=_price_kind_near(src.snippet or src.title, p.raw)))
+        _auction_price(src, self.offers[-1])
 
     def from_llm(self, src: Source, item: dict[str, Any], context: str) -> None:
         """Offer read from page text by the language model. The caller has verified that `context`
@@ -453,6 +458,7 @@ class OfferBuilder:
                                  currency=currency, currency_basis=cbasis, price_text=item["price_text"],
                                  price_type="range" if p and p.is_range else "listed", price_basis="llm_verified",
                                  evidence_quote=context, price_kind=_price_kind_near(context, item["price_text"])))
+        _auction_price(src, self.offers[-1])
 
 
 def ex_text_in(text: str, src: Source) -> bool:
@@ -469,6 +475,14 @@ def _normalized(text: str | None) -> str:
     text = (text or "").translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
                                                  "\xa0": " "}))
     return _squash(text)
+
+
+def _auction_price(src: Source, offer: Offer) -> None:
+    """On an auction site a price that doesn't say what it is is a bid, never a fixed asking price."""
+    if src.type == AUCTION and offer.price is not None and offer.price_kind == "asking":
+        offer.price_kind = "current_bid"
+        offer.notes.append("Auction site: the price shown is treated as a bid, not a fixed price - check whether the "
+                           "lot is still open, and add the buyer's premium and fees.")
 
 
 def _price_kind_near(text: str, price_text: str) -> str:

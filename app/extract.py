@@ -1022,7 +1022,8 @@ def focus_text(text: str, tokens: list[str], limit: int) -> str:
 # Contact details are copied from the business's own page (tel:/mailto: links, schema.org business data, page
 # text) or from a map/directory listing, always with where they were seen. Nothing is inferred.
 
-_PHONE = re.compile(r"(?<![\d\w-])(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?([2-9]\d{2})[\s.-]?(\d{4})(?![\d-])")
+_PHONE = re.compile(r"(?<![\d\w-])(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?([2-9]\d{2})[\s.-]?(\d{4})(?![\d-])"
+                    r"(?:\s*(?:,\s*)?(?:ext\.?|extension|x)\s*(\d{1,6}))?", re.I)
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
 _POSTAL = re.compile(r"\b([ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z])[ -]?(\d[ABCEGHJ-NPRSTV-Z]\d)\b")
 _US_ZIP = re.compile(r"\b(A[KLRZ]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|"
@@ -1031,20 +1032,42 @@ _BAD_EMAIL_END = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js
 
 
 def _phone_fmt(m: re.Match) -> str:
-    return f"({m.group(1)}) {m.group(2)}-{m.group(3)}"
+    """The number as written (with its extension), only trimmed."""
+    return re.sub(r"\s+", " ", m.group(0)).strip(" ,.")
+
+
+def phone_key(value: str) -> str:
+    """Digits identifying a phone number (for de-duplication only): area code, number and extension."""
+    m = _PHONE.search(value or "")
+    if not m:
+        return re.sub(r"\D", "", value or "")
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" + (f"x{m.group(4)}" if m.group(4) else "")
 
 
 def contacts_in_text(text: str, limit: int = 3) -> dict[str, list[str]]:
     """Phone numbers, emails and postal-code addresses written in `text`."""
     text = text or ""
-    phones = list(dict.fromkeys(_phone_fmt(m) for m in _PHONE.finditer(text)))[:limit]
+    phones, keys = [], set()
+    for m in _PHONE.finditer(text):
+        k = phone_key(m.group(0))
+        if k not in keys:
+            keys.add(k)
+            phones.append(_phone_fmt(m))
+    phones = phones[:limit]
     emails = [e for e in dict.fromkeys(m.group(0) for m in _EMAIL.finditer(text))
               if not e.lower().endswith(_BAD_EMAIL_END) and "example." not in e.lower()][:limit]
     addresses = []
     for m in _POSTAL.finditer(text):
-        start = max(0, m.start() - 70)
-        chunk = re.sub(r"\s+", " ", text[start:m.end()]).strip(" ,|")
-        chunk = re.split(r"[|•·]", chunk)[-1].strip()
+        # the address is the street line before the postal code: from its street number, within the same
+        # sentence or field ("Head office: 200 Bay St, Toronto ON M5J 2J2" -> "200 Bay St, Toronto ON M5J 2J2")
+        start = max(0, m.start() - 90)
+        chunk = re.sub(r"\s+", " ", text[start:m.end()])
+        chunk = re.split(r"[|•·]|(?<=[a-z0-9)])[.!?:;]\s", chunk)[-1].strip(" ,")
+        street = list(re.finditer(r"(?<![\w-])\d{1,6}[A-Za-z]?(?:-\d{1,5})?\s+(?=[A-Z0-9])", chunk))
+        if street:
+            chunk = chunk[street[0].start():]
+        elif not re.search(r",", chunk):
+            continue  # a postal code with no street or town before it isn't an address
         addresses.append(chunk)
     return {"phones": phones, "emails": emails, "addresses": list(dict.fromkeys(addresses))[:limit]}
 
@@ -1087,7 +1110,12 @@ def contacts_in_html(html: str) -> dict[str, list[str]]:
     for tag in soup(["script", "style", "noscript", "svg"]):
         tag.decompose()
     found = contacts_in_text(soup.get_text(" ", strip=True))
-    return {"phones": list(dict.fromkeys(phones + found["phones"]))[:3],
+    unique, keys = [], set()
+    for p in phones + found["phones"]:
+        if phone_key(p) not in keys:
+            keys.add(phone_key(p))
+            unique.append(p)
+    return {"phones": unique[:3],
             "emails": list(dict.fromkeys(e for e in emails + found["emails"]
                                          if not e.lower().endswith(_BAD_EMAIL_END)))[:3],
             "addresses": list(dict.fromkeys(addresses + found["addresses"]))[:3]}
@@ -1111,13 +1139,14 @@ def location_tier(text: str | None, home_city: str = "Thunder Bay") -> tuple[str
     if not t.strip():
         return None, None
     m = _POSTAL.search(t.upper())
-    if home_city.lower() in t.lower() or (m and m.group(1).startswith("P7")):
-        return "local", f"address in {home_city}"
-    if m:
-        first = m.group(1)[0]
-        if first in "PKLMN":
+    if m:  # the postal code decides; a town name alone can be a street ("Thunder Bay Rd") or a delivery area
+        if m.group(1).startswith("P7"):
+            return "local", f"address in {home_city} (P7 postal code)"
+        if m.group(1)[0] in "PKLMN":
             return "regional", "Ontario postal code"
         return "canada", "Canadian postal code"
+    if home_city.lower() in t.lower():
+        return "local", f"address in {home_city}"
     if re.search(r"\b(ON|Ontario)\b", t):
         return "regional", "Ontario address"
     if re.search(r"\b(AB|BC|MB|NB|NL|NS|NT|NU|PE|QC|SK|YT|Alberta|British Columbia|Manitoba|Quebec|Québec|"
@@ -1129,24 +1158,35 @@ def location_tier(text: str | None, home_city: str = "Thunder Bay") -> tuple[str
 
 
 # ------------------------------------------------------- price kinds, badges
-_COMPLETED_SALE = re.compile(r"\bsold\s+(?:for|at)\b|\bsold\s+price\b|\bsold\s+(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|"
-                             r"aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}|\b(?:winning|final|high(?:est)?)\s+bid\b|"
-                             r"\bhammer\s+price\b|\bprice\s+realized\b|\bsold\s*:\s*\$", re.I)
-_CURRENT_BID = re.compile(r"\bcurrent\s+bid\b|\bbid\s+now\b|\bstarting\s+bid\b|\bopening\s+bid\b|\bbids?\s*:\s*\d",
-                          re.I)
+_MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+# a finished sale: what an item sold for
+_SOLD = re.compile(r"\bsold\s+(?:for|at)\b|\bsold\s+price\b|\bsold\s*:\s*(?:c\s*)?\$|\bsold\s+(?:on\s+)?" + _MONTHS +
+                   r"\s+\d{1,2}|\bprice\s+realized\b|\bhammer\s+price\b|\b(?:auction|bidding|lot|sale)\s+"
+                   r"(?:ended|closed)\b|\bended\s+(?:on\s+)?" + _MONTHS, re.I)
+# an auction still running: its bid is not the final price
+_LIVE_BID = re.compile(r"\b(?:current|high(?:est)?|leading|top)\s+bid\b|\bbid\s+now\b|\b(?:starting|opening|minimum)"
+                       r"\s+bid\b|\bplace\s+(?:a\s+)?bid\b|\bbids?\s*:\s*\d|\bends\s+in\b|\b(?:closes|closing|ends)\s+"
+                       r"(?:on\s+|in\s+|at\s+)?(?:\d|" + _MONTHS + r"|today|tomorrow)|\btime\s+left\b|\bso\s+far\b", re.I)
+# ambiguous on their own ("winning bid $500"): a completed sale only when nothing says the auction is live
+_FINAL_BID = re.compile(r"\b(?:winning|final)\s+bid\b", re.I)
+
+
 _BADGES = re.compile(r"amazon'?s\s+choice|#?1\s+best\s+seller|\bbest\s+seller\b|top\s+rated(?:\s+(?:plus|seller))?|"
                      r"verified\s+supplier|gold\s+supplier|trade\s+assurance|overall\s+pick|top\s+brand|"
                      r"verified\s+seller", re.I)
 
 
 def price_kind(text: str, start: int = 0, end: int | None = None) -> str:
-    """'completed_sale', 'current_bid' or 'asking' for a price at text[start:end] (looks 80 chars around it)."""
+    """'completed_sale', 'current_bid' or 'asking' for a price at text[start:end] (looks 80 chars around it).
+    A sale that says it's sold or ended wins; then any sign the auction is still running; then 'winning bid'."""
     end = len(text or "") if end is None else end
     window = (text or "")[max(0, start - 80): end + 80]
-    if _COMPLETED_SALE.search(window):
+    if _SOLD.search(window):
         return "completed_sale"
-    if _CURRENT_BID.search(window):
+    if _LIVE_BID.search(window):
         return "current_bid"
+    if _FINAL_BID.search(window):
+        return "completed_sale"
     return "asking"
 
 

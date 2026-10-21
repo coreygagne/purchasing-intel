@@ -99,6 +99,19 @@ DIRECTORY: dict[str, SupplierInfo] = {
     # Business directories (they list businesses and contacts; they don't sell)
     "yellowpages.ca": SupplierInfo("Yellow Pages Canada", BUSINESS_DIRECTORY, "CA"),
     "canada411.ca": SupplierInfo("Canada411", BUSINESS_DIRECTORY, "CA"),
+    "411.ca": SupplierInfo("411.ca", BUSINESS_DIRECTORY, "CA"),
+    "cylex.ca": SupplierInfo("Cylex", BUSINESS_DIRECTORY, "CA"),
+    "cylex-canada.ca": SupplierInfo("Cylex", BUSINESS_DIRECTORY, "CA"),
+    "yelp.ca": SupplierInfo("Yelp", BUSINESS_DIRECTORY, "CA"),
+    "yelp.com": SupplierInfo("Yelp", BUSINESS_DIRECTORY, None),
+    "foursquare.com": SupplierInfo("Foursquare", BUSINESS_DIRECTORY, None),
+    "mapquest.com": SupplierInfo("MapQuest", BUSINESS_DIRECTORY, None),
+    "manta.com": SupplierInfo("Manta", BUSINESS_DIRECTORY, None),
+    # Social sites: many businesses' pages share one domain, so they are treated like directory listings
+    "facebook.com": SupplierInfo("Facebook", BUSINESS_DIRECTORY, None),
+    "instagram.com": SupplierInfo("Instagram", BUSINESS_DIRECTORY, None),
+    "linkedin.com": SupplierInfo("LinkedIn", BUSINESS_DIRECTORY, None),
+    "nextdoor.com": SupplierInfo("Nextdoor", BUSINESS_DIRECTORY, None),
     # US distributors / retailers / marketplaces
     "grainger.com": SupplierInfo("Grainger (US)", DISTRIBUTOR, "US"),
     "mscdirect.com": SupplierInfo("MSC Industrial Supply", DISTRIBUTOR, "US"),
@@ -198,6 +211,21 @@ def _lookup(domain: str) -> SupplierInfo | None:
         if cand in DIRECTORY:
             return DIRECTORY[cand]
     return None
+
+
+_SHARED_HOSTS = ("google.com", "google.ca", "business.site", "linktr.ee", "x.com", "twitter.com", "tiktok.com",
+                 "youtube.com", "youtu.be")
+
+
+def is_platform_domain(domain: str | None) -> bool:
+    """A site that hosts many businesses (marketplace, directory, social site, Google): its domain doesn't
+    identify one supplier, and contact details on it may belong to anyone listed there."""
+    if not domain:
+        return False
+    info = _lookup(domain)
+    if info and info.type in (MARKETPLACE, BUSINESS_DIRECTORY):
+        return True
+    return any(domain == h or domain.endswith("." + h) for h in _SHARED_HOSTS)
 
 
 def lookup_by_name(name: str) -> SupplierInfo | None:

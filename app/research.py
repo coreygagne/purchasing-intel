@@ -36,7 +36,7 @@ from .discovery import PlannedQuery
 from .providers import LocalBusiness, ProviderError, ProviderSet, ShoppingListing, build_providers
 from .providers.anthropic_fetch import VIA, AnthropicFetcher, AnthropicPageReader
 from .providers.base import SearchHit
-from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER, domain_of
+from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER, domain_of, is_platform_domain
 
 log = logging.getLogger(__name__)
 
@@ -236,6 +236,8 @@ class ResearchEngine:
             stated_budget = _number(req.answers.get("budget_cad"))
             quantity = req.quantity
             rounds, deepened = disc.depth_decision(depth, category, identity.name, None, quantity, stated_budget)
+            run_depth = disc.DEEPER[depth] if deepened else depth  # searched one level deeper than chosen
+            cfg = disc.DEPTH_BUDGET[run_depth]
             plan = disc.initial_plan(identity.name, category, depth, brand=brand, alt_names=alt_names,
                                      ai_queries=extra_queries, used_ok=req.used_ok, budget=rounds[0])
             seen = {disc._norm(pq) for pq in plan}
@@ -256,7 +258,11 @@ class ResearchEngine:
                 value = disc.snippet_value_estimate(sources)
                 more, why = disc.depth_decision(depth, category, identity.name, value, quantity, stated_budget)
                 if why:
-                    rounds, deepened = more, why
+                    run_depth = disc.DEEPER[depth]
+                    cfg = disc.DEPTH_BUDGET[run_depth]
+                    rounds = more
+                    deepened = (f"{why} Round 1 ran at {depth} depth before the prices were seen; the follow-up "
+                                "rounds and page reading used the deeper settings.")
 
             # 4. Follow-up rounds: leads from earlier rounds --------------------------------
             covered: set[str] = set()
@@ -310,8 +316,8 @@ class ResearchEngine:
             progress("Reading supplier pages for prices and contacts", 50)
             fetch_attempts, fetch_failures, fetched_via = await self._fetch_and_extract(
                 sources, builder, identity, fetcher, reader,
-                max_pages=round(self.settings.fetch_max_pages * FETCH_SCALE[depth]))
-            contact_pages = await self._contact_pages(sources, local_businesses, fetcher, CONTACT_PAGES[depth])
+                max_pages=round(self.settings.fetch_max_pages * FETCH_SCALE[run_depth]))
+            contact_pages = await self._contact_pages(sources, local_businesses, fetcher, CONTACT_PAGES[run_depth])
 
             if self.llm is not None:
                 progress("AI is reading page text (every extracted fact is checked against the source)", 70)
@@ -347,7 +353,8 @@ class ResearchEngine:
                 "queries": [asdict(p) for p in all_plan] + extra_rows,
                 "plan": {"category": category.key, "category_label": category.label,
                          "high_risk": category.high_risk, "rounds": round_log, "stop_reason": stop_reason,
-                         "deepened": deepened, "alt_names": alt_names, "used_ok": req.used_ok,
+                         "deepened": deepened, "run_depth": run_depth, "alt_names": alt_names,
+                         "used_ok": req.used_ok,
                          "channels": disc.channel_table(category, req.used_ok), "home": disc.HOME["city"],
                          "local_search": ("Google Maps via SerpApi" if providers.local else
                                           "not available (needs a SerpApi key); local suppliers were searched on "
@@ -514,11 +521,12 @@ class ResearchEngine:
         for b in businesses:
             if b.website:
                 dom = domain_of(b.website)
-                if dom and dom not in with_email and not _is_platform(dom):
+                if dom and dom not in with_email and not is_platform_domain(dom):
                     targets.append((dom, b.name, b.website))
         for s in sources:
-            near = (s.location or {}).get("tier") in ("local", "regional") or "local" in s.markets
-            if near and is_seller_source(s) and s.domain not in with_email and not _is_platform(s.domain):
+            loc = s.location or {}
+            near = loc.get("tier") in ("local", "regional") or loc.get("mentions_home") or "local" in s.markets
+            if near and is_seller_source(s) and s.domain not in with_email and not is_platform_domain(s.domain):
                 targets.append((s.domain, s.name, f"https://{s.domain}/"))
         picked, seen = [], set()
         for t in targets:
@@ -536,6 +544,11 @@ class ResearchEngine:
                 fr = await fetcher.fetch(url)
                 entry = {"domain": dom, "name": name, "url": url, "ok": fr.ok, "error": fr.error,
                          "fetched_at": fr.fetched_at, "phones": [], "emails": [], "addresses": []}
+                landed = domain_of(fr.final_url) if fr.final_url else dom
+                if fr.ok and landed.removeprefix("www.") != dom.removeprefix("www."):
+                    # sent to another site: its contacts aren't this business's
+                    entry.update(ok=False, error=f"redirected to another site ({landed})")
+                    return entry
                 if not (fr.ok and fr.html):
                     return entry
                 found = ex.contacts_in_html(fr.html)
@@ -561,7 +574,8 @@ class ResearchEngine:
                    and "shopping" not in s.purposes]
         def priority(s: Source) -> tuple[int, int, int, int]:
             exact = ex.match_offer(identity.model_tokens, f"{s.title} {s.snippet}").level == "exact"
-            local = (s.location or {}).get("tier") == "local" or "local" in s.markets
+            loc = s.location or {}
+            local = loc.get("tier") == "local" or loc.get("mentions_home") or "local" in s.markets
             preferred = s.type in (DISTRIBUTOR, RETAILER, MANUFACTURER, B2B_MARKETPLACE)
             return (0 if exact else 1, 0 if local else 1, 0 if preferred else 1, int(s.id[1:]))
         ordered = sorted(sellers, key=priority)
@@ -665,14 +679,6 @@ def _round_entry(rno: int, plan: list[PlannedQuery], hits: list[SearchHit], new_
             "new_prices": len(new_prices), "leads": [pq.lead for pq in plan if pq.lead]}
 
 
-def _is_platform(domain: str) -> bool:
-    """Marketplaces, directories and social sites: their contact details aren't the seller's."""
-    from .suppliers import BUSINESS_DIRECTORY, MARKETPLACE as MKT, _lookup
-    info = _lookup(domain)
-    return bool(info and info.type in (MKT, BUSINESS_DIRECTORY)) or domain.endswith(
-        ("facebook.com", "google.com", "google.ca", "instagram.com", "linkedin.com"))
-
-
 def _snippet_details(s: Source) -> None:
     """Contacts, location and marketplace badges written in a search result's own title and snippet."""
     text = f"{s.title}. {s.snippet}"
@@ -685,7 +691,9 @@ def _snippet_details(s: Source) -> None:
             if tier:
                 s.location = {"tier": tier, "basis": f"{basis} (search result text)"}
         elif disc.HOME["city"].lower() in text.lower():
-            s.location = {"tier": "local", "basis": f"search result mentions {disc.HOME['city']}"}
+            # "we ship to Thunder Bay" isn't a Thunder Bay business: worth reading first, not labelled local
+            s.location = {"tier": None, "mentions_home": True,
+                          "basis": f"search result mentions {disc.HOME['city']} (location not confirmed)"}
     s.badges = list(dict.fromkeys(s.badges + ex.badges(text)))[:3]
 
 
@@ -750,7 +758,8 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     by_offer = {o.id: o for o in offers}
     for key in ("lowest", "best_value"):
         if rec.get(key):
-            rec[key]["totals"] = mk.order_totals(by_offer[rec[key]["offer_id"]], quantity, length, home_province)
+            rec[key]["totals"] = mk.order_totals(by_offer[rec[key]["offer_id"]], quantity, length, home_province,
+                                                 clean)
     vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
                                home_city=disc.HOME["city"], quantity=quantity)
     market = mk.market_value(offers, tokens, length)
@@ -760,7 +769,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     checklist = import_checklist([asdict(o) for o in offers], fx_public, clean, category)
     compliance = COMPLIANCE.get(category, COMPLIANCE["general"])
     used_ok = (meta.get("plan") or {}).get("used_ok", True)
-    plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok)
+    plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok, clean)
     rfqs = rfq_drafts(vendors, identity, quantity, length, meta.get("answers"), compliance, category)
     cov = coverage_report(meta, sources, offers, vendors, market)
     quality = an.quality_evidence(sources, offers, tokens)

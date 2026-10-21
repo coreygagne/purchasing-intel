@@ -689,7 +689,7 @@ function srcRef(res, id) {
 
 function contactLine(c, kind) {
   const value = kind === "email" ? h("a", { href: `mailto:${c.value}` }, c.value)
-    : kind === "phone" ? h("a", { href: `tel:${c.value.replace(/[^\d+]/g, "")}` }, c.value) : c.value;
+    : kind === "phone" ? h("a", { href: `tel:${c.value.split(/\s*(?:ext\.?|extension|x)\s*\d/i)[0].replace(/[^\d+]/g, "")}` }, c.value) : c.value;
   return h("div", {}, value, h("span", { class: "sub" }, ` from ${c.url ? "" : c.basis}`, c.url ? link(c.url, c.basis) : null,
     c.seen_at ? `, seen ${day(c.seen_at)}` : ""));
 }
@@ -724,6 +724,8 @@ function suppliersTab(res) {
         h("div", {},
           h("h4", {}, "What they showed"),
           v.lowest ? h("div", {}, link(v.lowest.url, money(v.lowest.price, v.lowest.currency)), " ", h("span", { class: "sub" }, `${v.lowest.price_label}, ${day(v.lowest.observed_at)}${v.lowest.comparable ? "" : " (not comparable - see the offer)"}`)) : null,
+          (v.sold_or_bid_prices || []).map((x) => h("div", { class: "small" }, link(x.url, money(x.price, x.currency)), " ",
+            h("span", { class: "sub" }, `${x.price_kind === "completed_sale" ? "sold price (not an offer)" : "auction bid (not final)"}, ${day(x.observed_at)}`))),
           v.products.length ? h("ul", { class: "plain small" }, v.products.map((p) => h("li", {}, p))) : h("p", { class: "empty", style: "margin:0" }, "No product listing for this item was found on their site."),
           v.trade_signals.length ? h("div", { class: "small" }, "Trade terms seen: ", v.trade_signals.map((t, i) => [i ? "; " : "", `“${t.text}”`])) : null,
           v.badges.length ? h("div", { class: "small muted" }, `Marketplace badge: ${v.badges.join(", ")} (the marketplace's own label, not proof of quality or seller identity)`) : null),

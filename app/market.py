@@ -16,7 +16,7 @@ import statistics
 from typing import Any
 
 from .evidence import Offer
-from .import_costs import GST_RATE, HST_RATES
+from .import_costs import GST_RATE, HST_RATES, delivered_estimate
 from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER
 
 TRADE = {DISTRIBUTOR, MANUFACTURER, B2B_MARKETPLACE}
@@ -161,39 +161,45 @@ def _differences(group: list[Offer]) -> list[str]:
 
 
 def order_totals(o: Offer, quantity: int | None, order_length: dict[str, Any] | None,
-                 home_province: str) -> dict[str, Any] | None:
+                 home_province: str, assumptions: dict[str, float | None] | None = None) -> dict[str, Any] | None:
     """Unit price and total for the quantity (or length) asked for, with tax shown separately.
 
     Pre-tax totals are what the comparison uses: GST/HST paid by a registered business is generally recoverable.
+    Shipping, duty, surtax and brokerage are quoted, your assumption, or listed as unknown - never guessed.
     """
     if o.price_cad is None:
         return None
-    lines: list[dict[str, Any]] = []
-    unknown: list[str] = []
-    if order_length and o.per_ft_cad is not None:
-        goods = o.order_total_cad
+    if order_length and o.per_ft_cad is not None and o.order_total_cad is not None:
+        # priced by length: the goods are the requested length; the other costs work as for any order
+        d = delivered_estimate({"price_cad": o.order_total_cad, "currency": o.currency, "country": o.country,
+                                "pack_qty": None, "shipping_cost": o.shipping_cost, "shipping_text": o.shipping_text,
+                                "shipping_scope": o.shipping_scope, "fx_rate": o.fx_rate}, assumptions or {}, None)
+        goods_label = f"Goods for {order_length['text']}"
+        goods_note = f"{order_length['feet']:,.0f} ft x CAD {o.per_ft_cad:,.4f}/ft"
         unit = {"value": o.per_ft_cad, "label": "per foot", "basis": "calculated"}
-        lines.append({"label": f"Goods for {order_length['text']}", "value": goods, "basis": "calculated",
-                      "note": f"{order_length['feet']:,.0f} ft x CAD {o.per_ft_cad:,.4f}/ft"})
-        shipping = None
-        unknown.append("shipping")
         units_text = order_length["text"]
     elif o.delivered:
         d = o.delivered
-        comps = {c["label"]: c for c in d["components"]}
-        goods = comps.get("Goods (CAD)", {}).get("value")
+        goods_label, goods_note = None, None
+        goods = next((c["value"] for c in d["components"] if c["label"] == "Goods (CAD)"), None)
         unit = {"value": round(goods / d["units"], 4) if goods and d["units"] else o.price_cad,
                 "label": "per unit" if (o.pack_qty or quantity) else "per listing",
                 "basis": "calculated" if o.pack_qty or (quantity or 1) > 1 or o.currency != "CAD" else "quoted"}
-        for c in d["components"]:
-            if c["label"].startswith("GST at border"):
-                continue
-            lines.append({"label": c["label"], "value": c["value"], "basis": c["basis"], "note": c["note"]})
-        shipping = comps.get("Shipping", {}).get("value")
-        unknown = list(d["missing"])
         units_text = f"{d['units']} unit(s)" if d.get("units") else "one listing"
     else:
         return None
+    lines: list[dict[str, Any]] = []
+    border_gst = None
+    for c in d["components"]:
+        if c["label"].startswith("GST at border"):
+            border_gst = c["value"]
+            continue
+        if c["label"] == "Goods (CAD)" and goods_label:
+            lines.append({"label": goods_label, "value": c["value"], "basis": "calculated", "note": goods_note})
+        else:
+            lines.append({"label": c["label"], "value": c["value"], "basis": c["basis"], "note": c["note"]})
+    unknown = list(d["missing"])
+    shipping = next((c["value"] for c in d["components"] if c["label"] == "Shipping"), None)
     pre_tax = round(sum(l["value"] for l in lines if l["value"] is not None), 2) if lines else None
     domestic = o.country == "CA"
     rate = HST_RATES.get(home_province)
@@ -205,15 +211,13 @@ def order_totals(o: Offer, quantity: int | None, order_length: dict[str, Any] | 
         elif domestic:
             tax_line = {"label": "GST 5% (plus provincial sales tax)", "value": round(pre_tax * GST_RATE, 2),
                         "basis": "rate", "note": "provincial sales tax not included"}
-        else:
-            base = sum(l["value"] or 0 for l in lines if l["label"] in ("Goods (CAD)", "Customs duty", "Surtax"))
-            tax_line = {"label": "GST 5% at the border", "value": round(base * GST_RATE, 2), "basis": "rate",
+        elif border_gst is not None:
+            tax_line = {"label": "GST 5% at the border", "value": border_gst, "basis": "rate",
                         "note": "on goods plus duties; the provincial part of HST may need self-assessment"}
-    moq = o.moq
     return {"offer_id": o.id, "supplier": o.supplier, "quantity_text": units_text, "unit": unit,
             "lines": lines, "pre_tax_total": pre_tax, "tax": tax_line,
             "total_with_tax": round(pre_tax + tax_line["value"], 2) if pre_tax is not None and tax_line else None,
-            "complete": not unknown, "unknown": unknown, "minimum_order": moq,
+            "complete": not unknown, "unknown": unknown, "minimum_order": o.moq,
             "volume_terms": o.bulk, "shipping": shipping,
             "label": "estimated" if any(l["basis"] == "assumption" for l in lines) else "calculated",
             "note": "Pre-tax totals are used for comparison. Unknown costs are not counted - confirm them with the "

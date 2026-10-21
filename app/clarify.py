@@ -16,7 +16,11 @@ from . import extract as ex
 MAX_QUESTIONS = 4
 _LENGTH_ITEM = re.compile(r"\b(cable|wire|teck|cord|conductor|rope|chain|hose|tubing|conduit)\b", re.I)
 _CABLE = re.compile(r"\b(cable|wire|teck|cord|conductor)\b", re.I)
-_LENGTH_ANSWER = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(ft\b\.?|feet\b|foot\b|'|m\b|metres?\b|meters?\b)", re.I)
+_UNIT = r"(ft\b\.?|feet\b|foot\b|'|m\b|metres?\b|meters?\b)"
+_LENGTH_ANSWER = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*" + _UNIT, re.I)
+# "2 reels of 500 ft", "3 x 250 m": several lengths
+_MULTI_LENGTH = re.compile(r"(\d{1,4})\s*(?:x|×|reels?|spools?|coils?|rolls?|lengths?|pieces?|pcs)\s*(?:of\s*|@\s*)?"
+                           r"(\d[\d,]*(?:\.\d+)?)\s*" + _UNIT, re.I)
 
 
 def key_for(query: str) -> str:
@@ -111,10 +115,17 @@ def apply_answers(query: str, answers: dict[str, Any] | None, quantity: int | No
         except ValueError:
             pass
     length = raw.get("length")
+    length_unclear = None
     if length:
+        multi = _MULTI_LENGTH.search(str(length))
         m = _LENGTH_ANSWER.search(str(length))
-        if m:
+        if multi:
+            total = int(multi.group(1)) * float(multi.group(2).replace(",", ""))
+            out["length_text"] = f"{total:g} {multi.group(3)} of"
+        elif m:
             out["length_text"] = f"{m.group(1)} {m.group(2)} of"
+        else:
+            length_unclear = str(length)
     used = raw.get("used_ok")
     if isinstance(used, str):
         out["used_ok"] = not used.lower().startswith("new")
@@ -129,7 +140,10 @@ def apply_answers(query: str, answers: dict[str, Any] | None, quantity: int | No
     a = out["assumptions"]
     if "quantity" in asked and out["quantity"] is None:
         a.append("Quantity not given: prices are compared per unit, with totals for one.")
-    if "length" in asked and not out["length_text"]:
+    if "length" in asked and length_unclear:
+        a.append(f"Length answer '{length_unclear}' has no unit (ft or m), so it wasn't used - enter e.g. "
+                 f"'{length_unclear} ft' next time. Totals for your length can't be worked out.")
+    elif "length" in asked and not out["length_text"]:
         a.append("Length not given: per-foot and per-reel prices are shown but totals for your length can't be "
                  "worked out.")
     if "voltage" in asked and (raw.get("voltage") or "").lower() in ("", "not sure"):

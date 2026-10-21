@@ -16,7 +16,7 @@ from . import extract as ex
 from .evidence import Offer, Source, is_seller_source
 from .suppliers import (AUCTION, B2B_MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, COMPLAINTS, DEALS, DIRECTORY,
                         DISTRIBUTOR, FORUM, GOVERNMENT, MANUFACTURER, MARKETPLACE, PROPERTY_SITE, RETAILER, REVIEW,
-                        SEARCH, UNKNOWN, VIDEO, domain_of, lookup_by_name)
+                        SEARCH, UNKNOWN, VIDEO, domain_of, is_platform_domain, lookup_by_name)
 
 NOT_SUPPLIERS = {REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT, DEALS, SEARCH}
 TIERS = ("local", "regional", "canada", "us", "international")
@@ -28,8 +28,11 @@ _PLATFORM_TYPES = {MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, AUCTION, PROPER
 _TRADE_WORDS = re.compile(r"\b(trade (?:account|pricing|customers?)|contractor pricing|volume (?:discount|pricing)|"
                           r"bulk (?:pricing|orders?|discount)|wholesale|request (?:a )?quote|rfq|account pricing|"
                           r"tiered pricing|price breaks?)\b", re.I)
-# directory pages about one business (not search-results pages listing many)
-_DIRECTORY_BUSINESS = re.compile(r"yellowpages\.ca/bus/|canada411\.ca/business/", re.I)
+# directory and social pages about one business (not search-results pages or feeds listing many)
+_DIRECTORY_BUSINESS = re.compile(
+    r"yellowpages\.ca/bus/|canada411\.ca/business/|yelp\.(?:ca|com)/biz/|"
+    r"facebook\.com/(?!(?:groups|marketplace|events|search|people|watch|share|sharer|login|hashtag|photo|story|"
+    r"permalink|reel|profile\.php|pages/category)\b)[A-Za-z0-9.\-]{3,}/?(?:about/?)?(?:[?#]|$)", re.I)
 
 
 def _norm_name(name: str) -> str:
@@ -76,7 +79,8 @@ class _Vendor:
             self.tier, self.tier_basis, self.tier_strength = tier, basis, strength
 
     def add_phone(self, value: str, basis: str, url: str | None, seen_at: str | None) -> None:
-        if value and value not in (p["value"] for p in self.phones) and len(self.phones) < 3:
+        key = ex.phone_key(value)
+        if value and key not in (ex.phone_key(p["value"]) for p in self.phones) and len(self.phones) < 3:
             self.phones.append(_contact(value, basis, url, seen_at))
 
     def add_email(self, value: str, basis: str, url: str | None, seen_at: str | None) -> None:
@@ -160,6 +164,8 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
     # 2. map listings (Google Maps): name, address, phone and website as the listing shows them
     for b in local_businesses or []:
         dom = domain_of(b["website"]) if b.get("website") else None
+        if is_platform_domain(dom):
+            dom = None  # e.g. a Facebook page as "website": key by name, never pool with other businesses
         v = get(dom, b["name"])
         if v.name == (dom or "") or v.name.startswith(dom or "\0"):
             v.name = b["name"]  # a real business name beats a bare domain
@@ -172,9 +178,8 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
         if b.get("address"):
             v.address = {**_contact(b["address"], basis, url, seen), "_strength": 3}
             tier, tbasis = ex.location_tier(b["address"], home_city)
-            v.set_tier(tier or "local", f"{tbasis} ({basis})" if tier else f"{basis} near {home_city}", 3)
-        else:
-            v.set_tier("local", f"{basis} near {home_city} (no address shown)", 1)
+            if tier:  # an address that doesn't name a town or postal code doesn't place the business
+                v.set_tier(tier, f"{tbasis} ({basis})", 3)
         if b.get("rating") is not None:
             v.rating = {"value": b["rating"], "count": b.get("reviews"), "best": 5.0,
                         "basis": "Google Maps rating (all reviews of the business, not of this item)"}
@@ -231,7 +236,9 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
             v.tier, v.tier_basis = "us", "US seller"
         elif v.country:
             v.tier, v.tier_basis = "international", f"seller country {v.country}"
-    priced = [o for o in v.offers if o.price is not None]
+    # a published price is an asking price: a sold price or a running bid isn't something they'll sell at
+    priced = [o for o in v.offers if o.price is not None and o.price_kind == "asking"]
+    other = [o for o in v.offers if o.price is not None and o.price_kind != "asking"]
     comparable = [o for o in priced if o.comparable and o.compare_value is not None]
     quotes = [o for o in v.offers if o.price_type == "quote_required"]
     if priced:
@@ -253,7 +260,7 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
     if status == "quote_required":
         reasons.append("they show 'request a quote' for this item")
     elif status == "no_price_seen" and v.type not in (MARKETPLACE, BUSINESS_DIRECTORY, AUCTION, PROPERTY_SITE):
-        reasons.append("no published price for this item was found")
+        reasons.append("only sold or bid prices were seen" if other else "no published price for this item was found")
     if sells_trade and status == "published" and (quantity or 0) >= 2:
         reasons.append(f"trade or volume pricing at {quantity} units may beat the published price")
     if v.tier == "local" and status != "quote_required" and not reasons:
@@ -273,6 +280,8 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
         "address": address, "phones": v.phones, "emails": v.emails,
         "has_contact": bool(v.phones or v.emails),
         "products": products, "offer_ids": [o.id for o in v.offers], "priced_offers": len(priced),
+        "sold_or_bid_prices": [{"offer_id": o.id, "price": o.price, "currency": o.currency, "price_kind": o.price_kind,
+                                "observed_at": o.observed_at, "url": o.url} for o in other][:3],
         "price_status": status, "lowest": lowest,
         "trade_signals": _dedupe_trade(v.trade)[:4], "sells_trade": sells_trade,
         "quote_opportunity": bool(reasons), "quote_reasons": reasons,

@@ -31,8 +31,9 @@ def _same_item(o: Offer, tokens: list[str]) -> bool:
 
 
 def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: int | None,
-         order_length: dict[str, Any] | None, home_province: str) -> dict[str, Any]:
-    totals = order_totals(o, quantity, order_length, home_province)
+         order_length: dict[str, Any] | None, home_province: str,
+         assumptions: dict[str, float | None] | None = None) -> dict[str, Any]:
+    totals = order_totals(o, quantity, order_length, home_province, assumptions)
     specs = ("states " + ", ".join(o.spec_confirmed) if o.spec_confirmed else "") + (
         ("; doesn't state " + ", ".join(o.spec_missing)) if o.spec_missing else "")
     risks = []
@@ -67,7 +68,7 @@ def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: i
 
 def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: dict[str, Any], tokens: list[str],
                       quantity: int | None, order_length: dict[str, Any] | None, home_province: str,
-                      used_ok: bool = True) -> dict[str, Any]:
+                      used_ok: bool = True, assumptions: dict[str, float | None] | None = None) -> dict[str, Any]:
     by_id = {o.id: o for o in offers}
     vendor_of = _vendor_index(vendors)
     comparable = [o for o in offers if o.comparable and o.compare_value is not None
@@ -101,7 +102,7 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
         if o.id in rows:
             rows[o.id]["labels"].append(label)
         else:
-            rows[o.id] = _row(o, vendor_of.get(o.id), [label], quantity, order_length, home_province)
+            rows[o.id] = _row(o, vendor_of.get(o.id), [label], quantity, order_length, home_province, assumptions)
 
     pick_notes = []
     if "used" in picks:

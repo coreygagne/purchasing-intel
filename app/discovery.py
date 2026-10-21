@@ -132,25 +132,32 @@ CATEGORIES: dict[str, Category] = {
         ("local_suppliers", "retail", "distributor", "manufacturer", "wholesale", "b2b", "used", "auction",
          "completed_sales", "reviews", "issues", "specs"), {}),
 }
+# Checked in order. Property and vehicles need phrases that only mean property or a vehicle ("warehouse for
+# lease", "pickup truck"): their nouns are common in product names ("building wire", "home standby generator",
+# "pallet truck", "lot of 50 shackles", "semi-gloss paint"), so product categories are checked before vehicles.
 _CATEGORY_WORDS = [
-    ("property", r"\b(house|home|land|lot|acres?|acreage|building|warehouse|property|real estate|office space|"
-                 r"commercial space|industrial space|lease|condo|parcel)\b"),
-    ("vehicle", r"\b(truck|pick-?up|car|van|suv|vehicle|f-?150|f-?250|silverado|sierra|ram \d{4}|semi|tractor "
-                r"trailer|dump truck)\b"),
-    ("machinery", r"\b(excavator|loader|crane|forklift|reach stacker|telehandler|skid steer|backhoe|dozer|bulldozer|"
-                  r"boom lift|scissor lift|man ?lift|generator|compressor|welder|conveyor|grader|sweeper|machine|"
-                  r"machinery|equipment|hoist|winch)\b"),
+    ("property", r"\b(real estate|acres?|acreage|vacant land|land for (?:sale|lease)|lots? for sale|"
+                 r"(?:house|home|building|warehouse|condo|property|land|lot) for (?:sale|lease|rent)|"
+                 r"(?:warehouse|office|retail|commercial|industrial|yard|storage) (?:space|property|building|land|lot|unit)|"
+                 r"commercial real estate|property (?:listing|purchase|lease)|sq\.? ?ft (?:building|warehouse|space))\b"),
     ("electrical", r"\b(cable|wire|teck|awg|kcmil|mcm|breaker|transformer|conduit|switchgear|panelboard|vfd|"
                    r"contactor|receptacle|luminaire|light fixture|electrical)\b"),
     ("ppe", r"\b(gloves?|respirators?|masks?|hard ?hats?|helmets?|vests?|hi-?vis|boots|harness|lanyard|earplugs?|"
             r"ear ?muffs?|goggles|safety glasses|coveralls|ppe|face shield)\b"),
-    ("tools", r"\b(drill|impact|wrench|saw|grinder|ratchet|socket set|hammer|driver|tools?|torque)\b"),
+    ("machinery", r"\b(excavator|loader|crane|forklift|reach stacker|telehandler|skid steer|backhoe|dozer|bulldozer|"
+                  r"boom lift|scissor lift|man ?lift|generator|compressor|welder|conveyor|grader|sweeper|machine|"
+                  r"machinery|equipment|hoist|winch|pallet (?:truck|jack)|pallet racking|racking)\b"),
+    ("tools", r"\b(drill|impact|wrench|saw|grinder|ratchet|socket set|hammer|driver|tools?|torque|hand truck|dolly|"
+              r"charger)\b"),
     ("parts", r"\b(bearings?|seals?|gaskets?|filters?|belts?|hoses?|fittings?|valves?|pumps?|couplings?|sprockets?|"
-              r"shackles?|slings?|bolts?|nuts?|fasteners?|parts?)\b"),
+              r"shackles?|slings?|bolts?|nuts?|screws?|fasteners?|tires?|tyres?|parts?)\b"),
     ("consumables", r"\b(rags?|absorbents?|tape|lubricant|grease|oil|fuel|diesel|paper|cleaners?|degreaser|"
-                    r"chemicals?|salt|bags?|wipes|batteries|paint|sealant|adhesive)\b"),
+                    r"chemicals?|salt|bags?|wipes|batter(?:y|ies)|paint|sealant|adhesive)\b"),
     ("electronics", r"\b(laptops?|computers?|monitors?|printers?|phones?|tablets?|radios?|cameras?|routers?|"
                     r"servers?)\b"),
+    ("vehicle", r"\b(pick-?up(?: truck)?|dump truck|semi[- ]truck|semi[- ]tractor|tractor[- ]trailer|cargo van|"
+                r"cube van|suv|f-?[1-5]50|silverado|sierra \d{4}|ram [1-5]500|(?:used|new|work|service|delivery|fleet) "
+                r"(?:truck|car|van|vehicle)s?|(?:truck|car|van|vehicle)s? for sale|vehicle|automobile)\b"),
 ]
 # things whose failure can hurt people or cost a lot: always searched more deeply
 _HIGH_RISK_WORDS = re.compile(r"\b(lifting|rigging|sling|shackle|hoist|crane|fall protection|harness|respirator|"
@@ -309,12 +316,13 @@ def find_leads(sources: list[Any], local_businesses: list[dict[str, Any]], *, na
 
     A supplier lead is a seller site seen in the results that showed no price for this item (it may carry it or
     quote it). Local businesses from map listings are followed on their own websites."""
-    from .suppliers import DISTRIBUTOR, MANUFACTURER, RETAILER, UNKNOWN, domain_of
+    from .suppliers import DISTRIBUTOR, MANUFACTURER, RETAILER, UNKNOWN, domain_of, is_platform_domain
     covered = covered_domains or set()
     leads: list[Lead] = []
     for b in local_businesses:
         dom = domain_of(b["website"]) if b.get("website") else None
-        if dom and dom not in covered:
+        # a Facebook page or similar isn't the business's own site: searching that domain finds everyone else
+        if dom and dom not in covered and not is_platform_domain(dom):
             leads.append(Lead("local_business", dom, b.get("name") or dom, "local", 1))
     for s in sources:
         if s.domain in covered or s.type not in (DISTRIBUTOR, RETAILER, UNKNOWN, MANUFACTURER):
@@ -365,11 +373,17 @@ def follow_up_plan(leads: list[Lead], name: str, category: Category, round_no: i
 
 
 def snippet_value_estimate(sources: list[Any]) -> float | None:
-    """Rough item value from search snippets (to decide how deep to search - never shown as a price)."""
+    """Rough item value in CAD from Canadian sellers' search snippets, to decide how deep to search (never shown
+    as a price). Used, auction, review and other non-seller pages don't count; neither do foreign currencies."""
+    from .suppliers import DISTRIBUTOR, MANUFACTURER, MARKETPLACE, RETAILER, UNKNOWN
     vals = []
     for s in sources:
+        if s.type not in (DISTRIBUTOR, MANUFACTURER, RETAILER, MARKETPLACE, UNKNOWN) or s.country != "CA":
+            continue
+        if set(s.purposes) <= {"reviews", "issues", "specs", "used", "auction", "completed_sales"}:
+            continue  # found only by review, spec, used or auction searches
         for p in ex.find_prices(s.snippet or "")[:1]:
-            if p.currency in (None, "CAD", "USD") and not p.per:
+            if p.currency in (None, "CAD") and not p.per:
                 vals.append(p.amount)
     return statistics.median(vals) if len(vals) >= 3 else None
 
