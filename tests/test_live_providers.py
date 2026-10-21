@@ -1,4 +1,4 @@
-"""Live checks against the real Tavily and SerpApi APIs. They use real credits (about 5 Tavily credits and 3 SerpApi
+"""Live checks against the real Tavily and SerpApi APIs. They use real credits (about 16 Tavily credits and 5 SerpApi
 searches in total) and only run with PI_NETWORK_TESTS=1 plus the provider's key, e.g.
 
     PI_NETWORK_TESTS=1 TAVILY_API_KEY=tvly-... SERPAPI_API_KEY=... python -m pytest -q tests/test_live_providers.py
@@ -61,6 +61,24 @@ async def test_live_serpapi_google_shopping_canada_parses():
     assert any(item.price_value is not None for item in listings), "no listing had extracted_price"
 
 
+@needs_tavily
+async def test_live_tavily_site_restricted_search_stays_on_site():
+    p = TavilyProvider(SETTINGS.tavily_api_key, client())
+    hits = await p.search(f"{ITEM} price", purpose="lead", max_results=5, country="canada", domains=["homedepot.ca"])
+    assert all("homedepot.ca" in h.url for h in hits), [h.url for h in hits]
+
+
+@needs_serpapi
+async def test_live_serpapi_google_maps_thunder_bay_parses():
+    from app.discovery import HOME
+    p = SerpApiProvider(SETTINGS.serpapi_api_key, client())
+    found = await p.local("hardware store", HOME["maps_ll"])
+    assert found, "Google Maps returned no hardware stores near Thunder Bay"
+    assert all(b.name for b in found)
+    assert any(b.address and "Thunder Bay" in b.address for b in found), [b.address for b in found]
+    assert any(b.phone for b in found) and any(b.website for b in found)
+
+
 @needs_serpapi
 async def test_live_serpapi_web_search_parses():
     p = SerpApiProvider(SETTINGS.serpapi_api_key, client())
@@ -78,6 +96,7 @@ async def test_live_full_research_on_tavily(tmp_path):
     assert res["providers"]["web"] == "Tavily"
     assert all(q["status"] == "ok" for q in res["queries"]), res["queries"]
     assert res["counts"]["sources"] > 0
+    assert res["plan"]["rounds"] and res["coverage"]["channels"] and res["vendors"]
     cid = db.save_comparison(title=ITEM, query=ITEM, normalized=ITEM.lower(), product_key=res["product_key"],
                              result=res)
     assert db.get_comparison(cid)["result"]["identity"]["name"] == res["identity"]["name"]

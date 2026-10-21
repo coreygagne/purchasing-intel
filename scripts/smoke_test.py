@@ -74,6 +74,23 @@ async def main() -> int:
         r = rec.get(key)
         print(f"\n{key}: " + (f"{r['supplier']} {r['currency']} {r['price']:.2f}\n   " + "\n   ".join(r["explanation"])
                                 if r else "none - " + "; ".join(rec["notes"])))
+    plan = res.get("plan") or {}
+    print(f"\nPlan: {plan.get('category_label')}; rounds: " + "; ".join(
+        f"{r['round']}: {r['searches']} searches, {r['new_supplier_count']} new suppliers, {r['new_prices']} new prices"
+        for r in plan.get("rounds", [])) + f"; stopped: {plan.get('stop_reason')}" +
+        (f"; {plan['deepened']}" if plan.get("deepened") else ""))
+    print(f"Local search: {plan.get('local_search')}; map listings: {len(res.get('local_businesses') or [])}")
+    print("\nSuppliers (local first):")
+    for v in (res.get("vendors") or [])[:15]:
+        contacts = ", ".join([p["value"] for p in v["phones"]] + [e["value"] for e in v["emails"]]) or "no contacts"
+        print(f"  {v['name'][:34]:<34} {v['tier_label']:<28} {v['price_status']:<15} {contacts}")
+    lead = (res.get("recommendation") or {}).get("lead")
+    if lead:
+        print(f"\nRecommended: {lead['supplier']}\n   " + "\n   ".join(lead["why"]))
+    mv = (res.get("market_value") or {}).get("overall_new")
+    if mv:
+        print(f"Market (new): {mv['count']} prices, low {mv['low']}, median {mv['median']}, high {mv['high']}")
+    print("Next steps:", *((res.get("coverage") or {}).get("next_steps") or []), sep="\n  - ")
     print("\nGaps:", *res["gaps"], sep="\n  - ")
     if args.save:
         cid = db.save_comparison(title=res["identity"]["name"][:200], query=args.query,
