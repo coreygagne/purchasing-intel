@@ -112,7 +112,9 @@ Settings live in a file named **.env** in the app folder. It's created when you 
 
 1. Close the Terminal or black window to stop the app.
 2. Open the settings file:
-   - **Mac:** in Finder, open the app folder and press **Command-Shift-.** (period) to show hidden files.
+   - **Mac:** open the app folder in Finder, then hold **Command (⌘)** and **Shift (⇧)** and press the
+     **full-stop key (.)**, next to the comma. Hidden files appear greyed out; press the same keys to hide
+     them again.
      Then right-click **.env** and choose **Open With**, then **TextEdit**.
    - **Windows:** right-click **.env**, choose **Open with**, then **Notepad**.
 3. Change the line you need, save, and start the app again.
@@ -137,19 +139,23 @@ right box and click **Save**. The badge at the top right then lists it, for exam
 
 ## Updating to a new version
 
-Your key and saved research stay on your computer, so bring them across when you update:
+Your keys and saved research stay on your computer. On a Mac the starter brings them across for you.
 
 1. Close the Terminal (or black) window to stop the app.
-2. Rename your current folder to **purchasing-intel-old**.
+2. Rename your current folder to **purchasing-intel-old**. Leave it where it is.
 3. Download the new version from https://github.com/coreygagne/purchasing-intel (**Code**, then
-   **Download ZIP**), unzip it, and move the new **purchasing-intel-main** folder where the old one was.
-4. Copy two things from the old folder into the new one:
-   - **Mac:** in the old folder press **Command-Shift-.** to show hidden files.
-   - Drag the **.env** file and the **data** folder into the new folder.
-5. Start the app from the new folder.
-   - The first start takes a minute or two again.
-   - On a Mac you may need **Open Anyway** again (step 4 above).
-6. Check that your saved comparisons are there, then delete the old folder.
+   **Download ZIP**). Unzip it and move the new **purchasing-intel-main** folder into the same place as
+   **purchasing-intel-old**, so the two folders sit side by side.
+4. Start the app from the new folder.
+   - **Mac:** double-click **Start Purchasing Research**. Its window says "Found your previous copy" and
+     copies your keys and saved research over by itself. You may need **Open Anyway** again (step 4
+     above), and the first start takes a minute or two again.
+   - **Windows:** first copy the **.env** file and the **data** folder from the old folder into the new
+     one, then double-click **run.bat**.
+5. Check that your saved comparisons are there, then delete the **purchasing-intel-old** folder.
+
+If the app asks for a key anyway, the old folder wasn't found next to the new one. Paste the key into the
+box, or move the folders side by side and start again.
 
 ## If something goes wrong
 

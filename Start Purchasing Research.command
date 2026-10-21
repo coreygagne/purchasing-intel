@@ -9,6 +9,29 @@ pause_and_exit() {
   exit "${1:-1}"
 }
 
+# 0. Updating: if this copy has no keys yet, bring the keys (.env) and saved research (data folder) across
+#    from the previous copy in the same place (any folder named purchasing-intel...), newest first.
+if [ ! -f .env ]; then
+  here="$(pwd -P)"
+  old=""
+  for d in ../purchasing-intel*/; do
+    d="${d%/}"
+    [ -f "$d/.env" ] || continue
+    [ "$(cd "$d" && pwd -P)" = "$here" ] && continue
+    if [ -z "$old" ] || [ "$d/.env" -nt "$old/.env" ]; then old="$d"; fi
+  done
+  if [ -n "$old" ]; then
+    echo "Found your previous copy: $(basename "$old")"
+    cp -p "$old/.env" .env && chmod 600 .env && echo "  - copied your keys and settings"
+    if [ -d "$old/data" ]; then
+      [ -d data ] && mv data "data-replaced-$(date +%Y%m%d-%H%M%S)"
+      cp -Rp "$old/data" data && echo "  - copied your saved research"
+    fi
+    echo "When everything looks right, you can delete the $(basename "$old") folder."
+    echo
+  fi
+fi
+
 # 1. Find Python 3.11 or newer. Apple's built-in /usr/bin/python3 is 3.9 (too old), so it is skipped.
 PY=""
 for c in python3.14 python3.13 python3.12 python3.11 /usr/local/bin/python3 /opt/homebrew/bin/python3 \
