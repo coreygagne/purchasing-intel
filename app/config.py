@@ -7,6 +7,7 @@ file) and never sent to the browser. See `.env.example` for every option.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +42,9 @@ class Settings:
     serpapi_api_key: str | None = None
     serpapi_location: str | None = None
     anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-opus-5-5"
+    # Claude Haiku 5.5 keeps a research to roughly a tenth of what Claude Opus 5.5 costs; set PI_ANTHROPIC_MODEL
+    # (e.g. claude-opus-5-5) for the most capable model
+    anthropic_model: str = "claude-haiku-5-5"
     anthropic_effort: str = "medium"
     anthropic_base_url: str = "https://api.anthropic.com"
     search_provider: str = "auto"  # auto | tavily | serpapi | anthropic
@@ -66,6 +69,9 @@ class Settings:
     job_timeout_s: float = 420.0
     duplicate_window_hours: int = 12
     home_province: str = "ON"
+    # Estimated Anthropic spend per calendar month (UTC) after which new research is refused; 0 = no limit
+    monthly_budget_usd: float = 10.0
+    env_file: Path = field(default_factory=lambda: PROJECT_ROOT / ".env")  # where keys saved from the UI go
 
     @property
     def llm_enabled(self) -> bool:
@@ -76,9 +82,31 @@ class Settings:
         return self.fetch_via_anthropic and bool(self.anthropic_api_key)
 
 
+def save_env_values(path: Path, values: dict[str, str]) -> None:
+    """Set NAME=value lines in the .env file at `path` (created from .env.example if missing)."""
+    template = path if path.exists() else PROJECT_ROOT / ".env.example"
+    lines = template.read_text(encoding="utf-8").splitlines() if template.exists() else []
+    for name, value in values.items():
+        pattern = re.compile(rf"^\s*{re.escape(name)}\s*=")
+        for i, line in enumerate(lines):
+            if pattern.match(line):
+                lines[i] = f"{name}={value}"
+                break
+        else:
+            lines.append(f"{name}={value}")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)  # readable by this user only (no effect on Windows)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
 def load_settings(env_file: Path | None = None) -> Settings:
     """Build settings from the environment. `.env` never overrides real env vars."""
-    load_dotenv(env_file or PROJECT_ROOT / ".env", override=False)
+    env_path = env_file or PROJECT_ROOT / ".env"
+    load_dotenv(env_path, override=False)
     env = os.environ
     db_path = env.get("DATABASE_PATH")
     return Settings(
@@ -89,7 +117,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         # key and base URL explicitly so unrelated Anthropic credentials or
         # ANTHROPIC_BASE_URL values present on the machine are never picked up.
         anthropic_api_key=env.get("PI_ANTHROPIC_API_KEY") or env.get("ANTHROPIC_API_KEY") or None,
-        anthropic_model=env.get("PI_ANTHROPIC_MODEL") or "claude-opus-5-5",
+        anthropic_model=env.get("PI_ANTHROPIC_MODEL") or "claude-haiku-5-5",
         anthropic_effort=env.get("PI_ANTHROPIC_EFFORT") or "medium",
         anthropic_base_url=env.get("PI_ANTHROPIC_BASE_URL") or "https://api.anthropic.com",
         search_provider=(env.get("PI_SEARCH_PROVIDER") or "auto").lower(),
@@ -107,4 +135,6 @@ def load_settings(env_file: Path | None = None) -> Settings:
         job_timeout_s=_float(env.get("JOB_TIMEOUT_S"), 420.0),
         duplicate_window_hours=_int(env.get("DUPLICATE_WINDOW_HOURS"), 12),
         home_province=(env.get("HOME_PROVINCE") or "ON").upper(),
+        monthly_budget_usd=max(0.0, _float(env.get("PI_MONTHLY_BUDGET_USD"), 10.0)),
+        env_file=env_path,
     )

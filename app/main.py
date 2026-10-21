@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
 from . import extract as ex
-from .config import Settings, load_settings
+from .config import Settings, load_settings, save_env_values
+from .costs import PRICES_CHECKED, PRICES_PER_MTOK, estimate_usd
 from .db import Database, iso
 from .export import comparison_xlsx, offers_csv
 from .providers import SETUP_INSTRUCTIONS, provider_status
@@ -33,6 +36,37 @@ class ResearchBody(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=10_000_000)
     force: bool = False
     comparison_id: int | None = None
+
+
+class KeysBody(BaseModel):
+    anthropic_api_key: str | None = Field(default=None, max_length=300)
+    tavily_api_key: str | None = Field(default=None, max_length=300)
+
+
+# field -> (.env name, key prefix, accepted format)
+KEY_FORMATS = {"anthropic_api_key": ("ANTHROPIC_API_KEY", "sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+               "tavily_api_key": ("TAVILY_API_KEY", "tvly-", re.compile(r"tvly-[A-Za-z0-9_\-]{10,}"))}
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+KeyChecker = Callable[[str], Awaitable[str | None]]
+
+
+async def check_anthropic_key(key: str, base_url: str = "https://api.anthropic.com") -> str | None:
+    """None if Anthropic accepts the key, else a message. Lists models, which uses no tokens."""
+    import anthropic
+    client = anthropic.AsyncAnthropic(api_key=key, base_url=base_url, timeout=20, max_retries=1)
+    try:
+        await client.models.list(limit=1)
+    except anthropic.AuthenticationError:
+        return "Anthropic rejected this key. Check that you copied all of it."
+    except anthropic.PermissionDeniedError:
+        return "This key isn't allowed to use the Anthropic API."
+    except anthropic.APIConnectionError:
+        return "Couldn't reach Anthropic to check the key. Check the internet connection and try again."
+    except anthropic.APIStatusError as exc:
+        return f"Anthropic returned an error ({exc.status_code}) while checking the key. Try again shortly."
+    finally:
+        await client.close()
+    return None
 
 
 class ComparisonPatch(BaseModel):
@@ -60,9 +94,11 @@ class Job:
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
-               llm: Any | None = None, anthropic_client: Any | None = None) -> FastAPI:
+               llm: Any | None = None, anthropic_client: Any | None = None,
+               key_checker: KeyChecker | None = None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_path)
+    own_llm = llm is None  # rebuilt when a key is saved from the UI
     if llm is None and settings.llm_enabled:
         from .llm import ClaudeAnalyst
         llm = ClaudeAnalyst(settings)
@@ -74,13 +110,62 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     app.state.settings, app.state.db, app.state.engine, app.state.jobs = settings, db, engine, jobs
 
     # ------------------------------------------------------------------ status
+    def spend() -> dict[str, Any]:
+        return {"month_usd": round(db.month_spend(), 2), "budget_usd": settings.monthly_budget_usd,
+                "model": settings.anthropic_model if settings.anthropic_api_key else None,
+                "estimable": settings.anthropic_model in PRICES_PER_MTOK, "prices_checked": PRICES_CHECKED}
+
     @app.get("/api/status")
     def status() -> dict[str, Any]:
         st = provider_status(settings)
         return {**st, "version": __version__, "database": str(settings.database_path),
                 "page_fetching": settings.fetch_pages, "robots_txt": settings.respect_robots_txt,
                 "fetch_fallback": settings.fetch_fallback_enabled,
-                "home_province": settings.home_province}
+                "home_province": settings.home_province, "spend": spend()}
+
+    # ------------------------------------------------------------------- setup
+    def require_local(request: Request) -> None:
+        """Keys may be saved only by a browser on the machine running the app, from this app's own page."""
+        client_host = request.client.host if request.client else ""
+        ok = client_host in LOCAL_HOSTS and (request.url.hostname or "") in LOCAL_HOSTS
+        origin = request.headers.get("origin")
+        if origin:
+            o = urlsplit(origin)
+            ok = ok and o.hostname in LOCAL_HOSTS and o.port == request.url.port
+        if not ok:
+            raise HTTPException(403, "Keys can only be saved from the computer running the app "
+                                     "(open it at http://127.0.0.1).")
+        if "application/json" not in request.headers.get("content-type", ""):
+            raise HTTPException(415, "Send the keys as JSON.")
+
+    @app.post("/api/setup/keys")
+    async def save_keys(body: KeysBody, request: Request) -> dict[str, Any]:
+        require_local(request)
+        values: dict[str, str] = {}
+        for fld, (env_name, prefix, fmt) in KEY_FORMATS.items():
+            raw = (getattr(body, fld) or "").strip()
+            if not raw:
+                continue
+            if not fmt.fullmatch(raw):
+                raise HTTPException(400, f"That doesn't look like a {env_name} (it should start with '{prefix}').")
+            values[env_name] = raw
+        if not values:
+            raise HTTPException(400, "Paste a key first.")
+        if "ANTHROPIC_API_KEY" in values:
+            problem = await (key_checker or (lambda k: check_anthropic_key(k, settings.anthropic_base_url)))(
+                values["ANTHROPIC_API_KEY"])
+            if problem:
+                raise HTTPException(400, problem)
+        save_env_values(settings.env_file, values)
+        if "ANTHROPIC_API_KEY" in values:
+            settings.anthropic_api_key = values["ANTHROPIC_API_KEY"]
+            if own_llm:
+                from .llm import ClaudeAnalyst
+                engine.llm = ClaudeAnalyst(settings)
+        if "TAVILY_API_KEY" in values:
+            settings.tavily_api_key = values["TAVILY_API_KEY"]
+        log.info("saved %s to %s", ", ".join(values), settings.env_file)
+        return {"saved": sorted(values), "ready": provider_status(settings)["ready"]}
 
     # ---------------------------------------------------------------- research
     @app.post("/api/research")
@@ -100,6 +185,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                                     "refresh to search again (uses search credits)."}
         if body.comparison_id is not None and not db.get_comparison(body.comparison_id):
             raise HTTPException(404, "Comparison not found")
+        if settings.monthly_budget_usd > 0 and settings.anthropic_api_key:
+            spent = db.month_spend()
+            if spent >= settings.monthly_budget_usd:
+                return JSONResponse(status_code=402, content={
+                    "error": "budget",
+                    "message": f"This month's spending limit of US${settings.monthly_budget_usd:.2f} is reached "
+                               f"(about US${spent:.2f} used, estimated). New research starts again on the 1st, "
+                               "or raise PI_MONTHLY_BUDGET_USD in the .env file and restart."})
         search_id = db.create_search(query, normalized, ex.classify_input(query), body.depth)
         # Forget finished jobs after a while (results live in the database, not here)
         for jid in [j.id for j in jobs.values() if j.status != "running" and len(jobs) > 200]:
@@ -110,11 +203,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         def progress(step: str, pct: int) -> None:
             job.step, job.pct = step, pct
 
+        meter: dict[str, Any] = {}
+
+        def cost() -> float | None:  # also counts what a failed or stopped research had already used
+            return estimate_usd(meter["credits"]()) if "credits" in meter else None
+
         async def runner() -> None:
             try:
                 req = ResearchRequest(query=query, depth=body.depth, quantity=body.quantity,
                                       comparison_id=body.comparison_id)
-                result = await asyncio.wait_for(engine.run(req, progress), timeout=settings.job_timeout_s)
+                result = await asyncio.wait_for(engine.run(req, progress, meter), timeout=settings.job_timeout_s)
                 existing = db.get_comparison(body.comparison_id) if body.comparison_id else None
                 if existing and existing.get("assumptions"):
                     result = reanalyze(result, existing["assumptions"], settings.home_province)
@@ -122,20 +220,20 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                          product_key=result["product_key"], result=result,
                                          comparison_id=body.comparison_id)
                 db.add_observations(observation_rows(result, cid, search_id))
-                db.finish_search(search_id, "complete", cid)
+                db.finish_search(search_id, "complete", cid, cost_usd=cost())
                 job.comparison_id, job.status, job.step, job.pct = cid, "done", "Done", 100
             except ResearchError as exc:
                 job.status, job.error = "failed", {"kind": exc.kind, "message": str(exc), "details": exc.details}
-                db.finish_search(search_id, "failed", error=str(exc))
+                db.finish_search(search_id, "failed", error=str(exc), cost_usd=cost())
             except asyncio.TimeoutError:
                 msg = f"Research took longer than {settings.job_timeout_s:.0f}s and was stopped."
                 job.status, job.error = "failed", {"kind": "timeout", "message": msg}
-                db.finish_search(search_id, "failed", error=msg)
+                db.finish_search(search_id, "failed", error=msg, cost_usd=cost())
             except Exception as exc:  # noqa: BLE001 - never leave a job hanging
                 log.exception("research failed")
                 job.status = "failed"
                 job.error = {"kind": "internal", "message": f"Unexpected error: {type(exc).__name__}: {exc}"}
-                db.finish_search(search_id, "failed", error=job.error["message"])
+                db.finish_search(search_id, "failed", error=job.error["message"], cost_usd=cost())
 
         task = asyncio.create_task(runner())
         tasks.add(task)
@@ -253,5 +351,33 @@ def price_history(obs: list[dict[str, Any]]) -> dict[str, Any]:
 app = None  # created by run.py / uvicorn factory
 
 
+def _open_browser_when_ready(url: str, timeout_s: float = 60.0) -> None:
+    """Open `url` in the default browser once the server accepts connections (for the double-click starters)."""
+    import socket
+    import threading
+    import time
+    import webbrowser
+
+    parts = urlsplit(url)
+    host, port = parts.hostname or "127.0.0.1", parts.port or 80
+
+    def wait_and_open() -> None:
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            try:
+                with socket.create_connection((host, port), timeout=1):
+                    webbrowser.open(url)
+                    return
+            except OSError:
+                time.sleep(0.4)
+
+    threading.Thread(target=wait_and_open, daemon=True).start()
+
+
 def get_app() -> FastAPI:
-    return create_app()
+    import os
+
+    app = create_app()
+    if os.environ.get("PI_OPEN_BROWSER"):
+        _open_browser_when_ready(os.environ["PI_OPEN_BROWSER"])
+    return app

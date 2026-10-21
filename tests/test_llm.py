@@ -74,10 +74,18 @@ async def test_verified_offer_kept_fabricated_rejected():
     # "CAD" isn't written in the quoted text, so the currency is inferred from the .ca seller, not trusted from the AI
     assert o.currency == "CAD" and o.currency_basis == "inferred from seller country"
     assert o.shipping_text == "Ships in 2 business days"
-    # the request asks for structured JSON and uses server-side fallbacks
+    # the request asks for structured JSON; the default model (Haiku 5.5) has no server-side fallback to ask for
     call = msgs.calls[0]
     assert call["output_config"]["format"]["type"] == "json_schema"
-    assert call["fallbacks"] == "default" and call["betas"] == ["server-side-fallback-2026-07-01"]
+    assert call["model"] == "claude-haiku-5-5" and "fallbacks" not in call and "betas" not in call
+
+
+async def test_server_side_fallbacks_requested_only_for_models_that_accept_them():
+    msgs = FakeMessages({"product_summary": "x", "brand": "", "category": "", "key_specs": [], "search_queries": []})
+    client = SimpleNamespace(messages=msgs, beta=SimpleNamespace(messages=msgs))
+    opus = ClaudeAnalyst(Settings(anthropic_api_key="test", anthropic_model="claude-opus-5-5"), client=client)
+    await opus.plan("Acme TX-4400", "model")
+    assert msgs.calls[-1]["fallbacks"] == "default" and msgs.calls[-1]["betas"] == ["server-side-fallback-2026-07-01"]
 
 
 async def test_quality_points_need_verbatim_quotes():

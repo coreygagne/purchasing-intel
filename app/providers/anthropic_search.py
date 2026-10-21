@@ -23,6 +23,8 @@ import anthropic
 from .base import ProviderError, SearchHit
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Models that accept the server-side refusal fallback (`fallbacks="default"`); others reject it
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 THUNDER_BAY = {"type": "approximate", "city": "Thunder Bay", "region": "Ontario", "country": "CA",
                "timezone": "America/Toronto"}
 
@@ -50,7 +52,7 @@ class AnthropicSearchProvider:
         self.effort = effort
         self.credits_used = 0.0      # web searches billed
         self.tokens = {"input_tokens": 0, "output_tokens": 0}
-        self._fallbacks_supported = True
+        self._fallbacks_supported = self.model in FALLBACK_MODELS
 
     async def _create(self, kwargs: dict[str, Any]) -> Any:
         try:

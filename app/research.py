@@ -20,6 +20,7 @@ import httpx
 from . import analysis as an
 from . import extract as ex
 from .config import Settings
+from .costs import PRICES_CHECKED, estimate_usd
 from .db import Database, iso
 from .evidence import Offer, OfferBuilder, Source, apply_match, build_sources, is_seller_source, add_source
 from .fetch import FetchResult, PageFetcher
@@ -170,7 +171,9 @@ class ResearchEngine:
         return httpx.AsyncClient(transport=self.transport, timeout=self.settings.search_timeout_s,
                                  follow_redirects=False)
 
-    async def run(self, req: ResearchRequest, progress: Progress | None = None) -> dict[str, Any]:
+    async def run(self, req: ResearchRequest, progress: Progress | None = None,
+                  meter: dict[str, Any] | None = None) -> dict[str, Any]:
+        """`meter`, if given, receives meter["credits"]: a callable returning usage so far (also after a failure)."""
         progress = progress or (lambda step, pct: None)
         started = time.monotonic()
         query = req.query.strip()
@@ -197,6 +200,17 @@ class ResearchEngine:
                                           respect_robots=self.settings.respect_robots_txt)
                       if ai_fetcher is not None and self.llm is not None and self.settings.fetch_pages else None)
             llm_usage: dict[str, Any] = {}
+
+            def current_credits() -> dict[str, Any]:
+                credits = providers.credits()
+                usage = dict(llm_usage)
+                if ai_fetcher is not None and (ai_fetcher.requests or ai_fetcher.tokens["input_tokens"]):
+                    credits["anthropic_web_fetches"] = ai_fetcher.requests
+                    usage["web_fetch"] = {**ai_fetcher.tokens, "model": ai_fetcher.model}
+                return {**credits, **({"llm_usage": usage} if usage else {})}
+
+            if meter is not None:
+                meter["credits"] = current_credits
 
             # 1. Understand the request ------------------------------------------------
             progress("Understanding the request", 5)
@@ -274,10 +288,7 @@ class ResearchEngine:
             fx = await fx_service.rates(currencies)
 
             progress("Comparing offers", 90)
-            credits = providers.credits()
-            if ai_fetcher is not None and (ai_fetcher.requests or ai_fetcher.tokens["input_tokens"]):
-                credits["anthropic_web_fetches"] = ai_fetcher.requests
-                llm_usage["web_fetch"] = dict(ai_fetcher.tokens)
+            credits = current_credits()
             meta = {
                 "query": query, "depth": depth, "quantity": req.quantity, "researched_at": iso(),
                 "duration_s": round(time.monotonic() - started, 1),
@@ -291,7 +302,9 @@ class ResearchEngine:
                                                            "result_count": shopping_status.get("result_count", 0),
                                                            "error": shopping_status.get("error"),
                                                            "provider": "SerpApi"}] if shopping_status else []),
-                "credits": {**credits, **({"llm_usage": llm_usage} if llm_usage else {})},
+                "credits": credits,
+                "cost_estimate": {"usd": estimate_usd(credits), "prices_checked": PRICES_CHECKED,
+                                  "note": "Anthropic charges estimated from reported usage at list prices"},
                 "fetch": {"attempted": fetch_attempts, "failed": fetch_failures, "via_anthropic": fetched_via,
                           "robots_respected": self.settings.respect_robots_txt},
                 "fx_errors": fx_service.errors,
@@ -566,7 +579,7 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
         offers.append(Offer(**{k: v for k, v in o.items() if k in Offer.__dataclass_fields__}))
     fx = {cur: FxRate(**r) for cur, r in (result.get("fx") or {}).items()}
     meta_keys = ["query", "depth", "quantity", "researched_at", "duration_s", "providers", "queries", "credits",
-                 "fetch", "fx_errors"]
+                 "cost_estimate", "fetch", "fx_errors"]
     meta = {k: result.get(k) for k in meta_keys}
     if quantity is not None:
         meta["quantity"] = quantity or None

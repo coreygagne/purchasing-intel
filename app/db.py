@@ -113,6 +113,9 @@ class Database:
         if str(self.path) != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(SCHEMA)
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(searches)")}
+        if "cost_usd" not in cols:  # added after the first release
+            self._conn.execute("ALTER TABLE searches ADD COLUMN cost_usd REAL")
         self._conn.commit()
 
     @contextmanager
@@ -140,12 +143,21 @@ class Database:
             return int(cur.lastrowid)
 
     def finish_search(self, search_id: int, status: str, comparison_id: int | None = None,
-                      error: str | None = None) -> None:
+                      error: str | None = None, cost_usd: float | None = None) -> None:
         with self.tx() as c:
             c.execute(
-                "UPDATE searches SET status = ?, comparison_id = ?, error = ?, finished_at = ? WHERE id = ?",
-                (status, comparison_id, error, iso(), search_id),
+                "UPDATE searches SET status = ?, comparison_id = ?, error = ?, finished_at = ?, cost_usd = ?"
+                " WHERE id = ?",
+                (status, comparison_id, error, iso(), cost_usd, search_id),
             )
+
+    def month_spend(self, now: datetime | None = None) -> float:
+        """Estimated Anthropic spend (US$) of searches started this calendar month (UTC)."""
+        start = (now or utcnow()).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        with self.tx() as c:
+            row = c.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM searches WHERE created_at >= ?",
+                            (iso(start),)).fetchone()
+        return float(row["s"])
 
     def recent_searches(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.tx() as c:

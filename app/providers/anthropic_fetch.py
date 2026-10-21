@@ -55,7 +55,7 @@ class AnthropicFetcher:
     async def fetch(self, url: str, max_content_tokens: int = 6000) -> FetchedDoc:
         try:
             resp = await self.client.messages.create(
-                model=self.model, max_tokens=1000, output_config={"effort": "low"},
+                model=self.model, max_tokens=2000, output_config={"effort": "low"},
                 tools=[{"type": TOOL_TYPE, "name": "web_fetch", "max_uses": 1,
                         "max_content_tokens": max_content_tokens}],
                 messages=[{"role": "user", "content": f"Fetch this URL with the web_fetch tool, then reply only "

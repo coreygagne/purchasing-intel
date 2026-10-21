@@ -24,29 +24,45 @@ mode and no offline fallback.
 
 ## Quick start
 
+**New to this? Follow [GETTING-STARTED.md](GETTING-STARTED.md)**: plain-language steps, no coding.
+
 Requirements: Python 3.11+ and internet access to the hosts listed under [Network](#network-access).
 
-```bash
-cp .env.example .env          # then put your TAVILY_API_KEY in .env
-./run.sh                      # Linux/macOS: creates .venv, installs, starts http://127.0.0.1:8000
-```
+- **Windows:** double-click `run.bat`. It installs Python with winget if it's missing, sets up `.venv` on the
+  first run, starts the app and opens the browser.
+- **Linux/macOS:** run `./run.sh` (on a Mac it also opens the browser).
 
-On Windows, copy `.env.example` to `.env`, edit it, and double-click `run.bat`. (`run.bat` doesn't read `.env`
-itself; the app does on startup.)
+The app runs at http://127.0.0.1:8000. With no key configured, it shows a setup screen where you paste an
+Anthropic key (and optionally a Tavily key). The key is checked with Anthropic using a free model-list call,
+then saved to `.env` on this computer. It is never sent back to the browser. Keys can only be saved from the
+computer running the app, from the app's own page. You can also edit `.env` directly (see `.env.example`).
+The badge at top right names the active search, e.g. "Ready: Anthropic web search + AI reading".
 
-Open http://127.0.0.1:8000. The badge at top right turns green ("Ready: Tavily…") when a provider is configured.
+**Low-cost defaults.** The app is set up to spend little:
+- **Model:** Claude Haiku 5.5 (US$0.10 / US$0.50 per million input/output tokens).
+- **Depth:** Quick is preselected.
+- **Monthly limit:** the app refuses new research once the estimated Anthropic spend for the month reaches
+  `PI_MONTHLY_BUDGET_USD` (default US$10). This month's spend is shown under the search bar, and each
+  research shows its estimated cost.
 
-**Trying it with only an Anthropic key.** Leave `TAVILY_API_KEY` empty and set `ANTHROPIC_API_KEY` in `.env`.
-The app then uses Anthropic web search for searching and Claude for reading, and the badge reads "Ready:
-Anthropic web search". This is the configuration verified live end to end (see Status). Adding a Tavily key
-later switches searching to Tavily automatically, with no code change. Cost on Claude Opus 5.5, as measured:
-- about US$0.72 per quick research, about US$1.00–1.30 per standard one;
-- so 50 standard researches a month comes to roughly US$50–65.
+Estimated cost per research with only an Anthropic key:
+- about US$0.08–0.10 for Quick and US$0.12–0.15 for Standard, so the US$10 default covers roughly 70–100
+  researches a month;
+- most of it is the US$0.01 fee per web search.
 
-To keep a trial predictable:
-- set a monthly spend limit for the key's workspace in the Anthropic Console;
-- use quick depth for routine items;
-- optionally set `PI_FETCH_MODEL=claude-haiku-5-5`.
+These figures come from the token counts measured in the Opus live runs, priced for Haiku. Haiku itself
+hasn't been run live in this app yet, so the first research is its live test; its details show the actual
+estimate.
+
+For stronger reading, set `PI_ANTHROPIC_MODEL`. Only the Opus Quick figure was measured live:
+
+| Model | Quick | Standard |
+|---|---|---|
+| `claude-sonnet-5-5` | about US$0.40 (estimate) | about US$0.55–0.70 (estimate) |
+| `claude-opus-5-5` | about US$0.72 (measured) | about US$1.00–1.30 (estimate) |
+
+Also set a spend limit in the Anthropic Console: Anthropic enforces it, so it holds even if the app's
+estimate is off. Adding a Tavily key (free plan) moves searching off Anthropic.
 
 **The app has no login in Phase 1.** It binds to `127.0.0.1` (this computer only) by default. Only set
 `HOST=0.0.0.0` on a trusted internal network, or behind your company's sign-in proxy.
@@ -64,7 +80,7 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 |---|---|---|---|---|
 | **Tavily** (`TAVILY_API_KEY`), https://app.tavily.com | Recommended primary | Web search across manufacturers, distributors, marketplaces, reviews, forums; returns page text | 1,000 credits/month, no card | ~$30/mo for 4,000 credits; pay-as-you-go ~US$0.008/credit |
 | **SerpApi** (`SERPAPI_API_KEY`), https://serpapi.com | Optional (or the only provider) | Google Shopping **Canada** listings with structured prices, ratings and delivery terms; Google web results if Tavily isn't set | 250 searches/month | from ~US$25/mo for 1,000 searches |
-| **Anthropic Claude** (`ANTHROPIC_API_KEY`), https://console.anthropic.com | Optional | Understands plain-language requests, extracts prices from page text, summarizes reviews. Every extracted fact is checked word-for-word against the source; failures are discarded and counted. | none | Claude Opus 5.5: US$4 / US$20 per million input/output tokens |
+| **Anthropic Claude** (`ANTHROPIC_API_KEY`), https://console.anthropic.com | Optional | Understands plain-language requests, extracts prices from page text, summarizes reviews. Every extracted fact is checked word-for-word against the source; failures are discarded and counted. | none | Default Claude Haiku 5.5: US$0.10 / US$0.50 per million input/output tokens. Claude Sonnet 5.5 US$2 / US$10; Claude Opus 5.5 US$4 / US$20 |
 | **Anthropic web search** (same `ANTHROPIC_API_KEY`) | Alternative primary | Claude's server-side `web_search` tool (`web_search_20250305`, which returns citations). Anthropic runs the search, so only `api.anthropic.com` must be reachable. Used automatically when no Tavily/SerpApi key is set, or force it with `PI_SEARCH_PROVIDER=anthropic`. Snippets are built only from the citations' verbatim `cited_text`. | none | US$10 per 1,000 searches plus tokens for the results read. Measured: about US$0.09 per query on Claude Opus 5.5, about US$0.72 for a quick research including AI reading |
 | **Bank of Canada Valet** | Built in | Daily FX rates (USD, EUR, CNY…→CAD) | free, no key | n/a |
 | **Anthropic web fetch** (same `ANTHROPIC_API_KEY`) | Automatic fallback, on by default | Reads a supplier page or the Bank of Canada rate **only when this server can't connect to it** (DNS, network or timeout). See "Fallback reading" below. | none | Tokens only (the page text is billed as input). Measured on Claude Opus 5.5: see Status. `PI_FETCH_MODEL=claude-haiku-5-5` costs far less per page |
@@ -73,15 +89,15 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 
 | Depth | Web searches | Tavily credits | + SerpApi | Typical use |
 |---|---|---|---|---|
-| Quick | 3 (price, reviews, wholesale) | 3 | +1 search | fast price check |
-| Standard (default) | 6 (+ suppliers, problems/recalls, specs) | 6 | +1 search | normal purchase |
+| Quick (preselected) | 3 (price, reviews, wholesale) | 3 | +1 search | fast price check |
+| Standard | 6 (+ suppliers, problems/recalls, specs) | 6 | +1 search | normal purchase |
 | Deep | 8, advanced (+ alternatives, cross-border USD) | 16 | +1 search | larger or riskier buys |
 
 So the Tavily free tier covers roughly 160 standard researches per month. Pay-as-you-go works out to about
 US$0.05 per standard research. With AI on, add roughly 15–25k input tokens and 2–8k output tokens
-(including thinking) per research: about **US$0.10–0.30 on Claude Opus 5.5**. This is an estimate; the
-Sources tab shows the actual tokens used for each research. Use `PI_ANTHROPIC_MODEL` / `PI_ANTHROPIC_EFFORT`
-to choose a cheaper setting.
+(including thinking) per research. That's about **US$0.01 on the default Claude Haiku 5.5**, or
+US$0.10–0.30 on Claude Opus 5.5. This is an estimate; each research's details show its tokens and estimated
+cost. Use `PI_ANTHROPIC_MODEL` / `PI_ANTHROPIC_EFFORT` to change it.
 
 Re-running a search for the same item within 12 hours (`DUPLICATE_WINDOW_HOURS`) offers the saved result
 first, so credits aren't spent by accident. Changing import assumptions recalculates without searching.

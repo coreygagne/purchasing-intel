@@ -130,6 +130,16 @@ button, input, select { font: inherit; color: inherit; }
 .field-inline input { width: 110px; padding: 6px 8px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--sheet); }
 .cost-hint { font-size: 13px; color: var(--ink-3); }
 
+.keyform { display: grid; gap: 10px; margin-top: 14px; max-width: 560px; }
+.keyform label { display: grid; gap: 4px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.keyform input {
+  min-width: 0; padding: 9px 10px; border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--sheet); color: var(--ink); font: inherit; font-weight: 400;
+}
+.keyform .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.keyform .msg { font-size: 14px; color: var(--ink-2); }
+.keyform .msg.err { color: var(--risk); }
+
 /* ------------------------------------------------------------ provenance marks */
 .mark {
   --c: var(--ink-3);

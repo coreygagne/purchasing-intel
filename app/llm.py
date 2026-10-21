@@ -25,10 +25,9 @@ import anthropic
 from . import extract as ex
 from .config import Settings
 from .evidence import OfferBuilder, Source, is_seller_source
+from .providers.anthropic_search import FALLBACK_BETA, FALLBACK_MODELS
 
 log = logging.getLogger(__name__)
-
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_SOURCE_CHARS = 4000
 MAX_TOTAL_CHARS = 70000
 
@@ -221,7 +220,7 @@ class ClaudeAnalyst:
         self.effort = settings.anthropic_effort
         self.client = client or anthropic.AsyncAnthropic(
             api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, timeout=180.0, max_retries=2)
-        self._fallbacks_supported = True
+        self._fallbacks_supported = self.model in FALLBACK_MODELS
 
     async def _call(self, user: str, schema: dict[str, Any], max_tokens: int) -> tuple[dict[str, Any], dict[str, Any]]:
         kwargs: dict[str, Any] = dict(
@@ -273,7 +272,7 @@ class ClaudeAnalyst:
             "suppliers, distributors or equivalent products for this item. Do not add model numbers that are not "
             "in the request."
         )
-        data, usage = await self._call(user, PLAN_SCHEMA, 2000)
+        data, usage = await self._call(user, PLAN_SCHEMA, 4000)  # room for thinking; billed only if used
         data["search_queries"] = [q.strip()[:200] for q in data.get("search_queries", []) if q.strip()][:3]
         data["key_specs"] = [k.strip()[:120] for k in data.get("key_specs", []) if k.strip()][:6]
         data["_usage"] = usage

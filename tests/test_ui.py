@@ -25,7 +25,7 @@ def _free_port() -> int:
 def servers():
     out = {}
     threads = []
-    for name, unconfigured in (("ready", False), ("unconfigured", True)):
+    for name, unconfigured in (("ready", False), ("unconfigured", True), ("setup", True)):
         port = _free_port()
         server = uvicorn.Server(uvicorn.Config(build(unconfigured), host="127.0.0.1", port=port, log_level="warning"))
         t = threading.Thread(target=server.run, daemon=True)
@@ -116,4 +116,22 @@ def test_phone_width_has_no_horizontal_scroll(servers, browser):
     page.goto(servers["ready"] + "/#/c/1")
     page.wait_for_selector(".rec")
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
+    page.close()
+
+
+def test_pasting_a_key_on_the_setup_screen_makes_the_app_ready(servers, browser):
+    page = browser.new_page()
+    page.goto(servers["setup"])
+    page.wait_for_selector("#key-anthropic")
+    assert page.is_disabled("#search-btn")
+    page.fill("#key-anthropic", "sk-ant-wrongformat")
+    page.click(".keyform button[type=submit]")
+    page.wait_for_selector(".keyform .msg.err")
+    assert "sk-ant-" in page.inner_text(".keyform .msg")
+    page.fill("#key-anthropic", "sk-ant-api03-" + "B" * 40)
+    page.click(".keyform button[type=submit]")
+    page.wait_for_function("!document.querySelector('#search-btn').disabled")
+    assert "Anthropic web search" in page.inner_text("#status-pill")
+    assert "Anthropic spend this month: about US$0.00 of your US$10.00 monthly limit" in page.inner_text("#cost-hint")
+    assert page.is_checked("input[name=depth][value=quick]")  # the low-cost depth is preselected
     page.close()

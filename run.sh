@@ -13,4 +13,6 @@ env_value() { [ -f .env ] && grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -
 HOST="${HOST:-$(env_value HOST)}"; HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-$(env_value PORT)}"; PORT="${PORT:-8000}"
 echo "Purchasing Research: http://${HOST}:${PORT}"
+# On a Mac, open the browser once the app is up (not on Linux, where there may be no desktop)
+if [ "$(uname)" = "Darwin" ] && [ -z "${PI_OPEN_BROWSER:-}" ]; then export PI_OPEN_BROWSER="http://127.0.0.1:${PORT}"; fi
 exec uvicorn app.main:get_app --factory --host "$HOST" --port "$PORT"

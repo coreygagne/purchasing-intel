@@ -293,7 +293,7 @@ def test_ai_layer_integration_with_verification(tmp_path):
         job = research(c)
         assert job["status"] == "done", job
         res = c.get(f"/api/comparisons/{job['comparison_id']}").json()["result"]
-        assert res["providers"]["llm"] == "claude-opus-5-5"
+        assert res["providers"]["llm"] == "claude-haiku-5-5"  # the low-cost default
         assert any(q["purpose"] == "ai_suggested" for q in res["queries"])
         assert res["identity"]["key_specs"] == ["drive size", "max torque"]
         summary = res["quality"]["summary"]

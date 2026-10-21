@@ -105,8 +105,12 @@ async function loadStatus() {
   const pill = $("#status-pill");
   const ok = r.ok && r.body.ready;
   pill.classList.toggle("ok", ok);
-  const web = (r.body?.providers || []).filter((p) => p.configured && p.name !== "Bank of Canada Valet").map((p) => p.name);
-  pill.querySelector("span").textContent = ok ? `Ready: ${web.join(", ")}` : "Setup needed";
+  const prov = r.body?.providers || [];
+  const has = (name) => prov.some((p) => p.configured && p.name.startsWith(name));
+  const extra = [];
+  if (has("SerpApi") && r.body?.web_search !== "SerpApi (Google)") extra.push("Google Shopping");
+  if (has("Claude")) extra.push("AI reading");
+  pill.querySelector("span").textContent = ok ? `Ready: ${[r.body.web_search, ...extra].join(" + ")}` : "Setup needed";
   $("#search-btn").disabled = !ok;
   updateCostHint();
 }
@@ -116,7 +120,40 @@ function setupNotice(setup) {
     h("h3", {}, "Connect a search provider to start"),
     h("p", { style: "margin:0" }, s?.summary || "No search provider is configured."),
     h("ol", {}, (s?.steps || []).map((x) => h("li", {}, x))),
+    keyForm(),
     h("p", { class: "small", style: "margin:10px 0 0" }, s?.docs || ""));
+}
+// Keys go to this computer's .env file through the local server; they are never shown again.
+function keyForm() {
+  const msg = h("span", { class: "msg", role: "status" });
+  const ak = h("input", { type: "password", id: "key-anthropic", autocomplete: "off", spellcheck: "false", placeholder: "sk-ant-..." });
+  const tk = h("input", { type: "password", id: "key-tavily", autocomplete: "off", spellcheck: "false", placeholder: "tvly-... (optional)" });
+  const btn = h("button", { class: "btn primary", type: "submit" }, "Save");
+  const say = (text, err = false) => { msg.className = err ? "msg err" : "msg"; msg.textContent = text; };
+  return h("form", { class: "keyform", onsubmit: async (e) => {
+    e.preventDefault();
+    const body = { anthropic_api_key: ak.value.trim() || null, tavily_api_key: tk.value.trim() || null };
+    if (!body.anthropic_api_key && !body.tavily_api_key) { say("Paste a key first.", true); return; }
+    btn.disabled = true;
+    say(body.anthropic_api_key ? "Checking the key with Anthropic..." : "Saving...");
+    const r = await api("/api/setup/keys", { method: "POST", body: JSON.stringify(body) });
+    btn.disabled = false;
+    if (!r.ok) { say(typeof r.body?.detail === "string" ? r.body.detail : "Couldn't save the key.", true); return; }
+    ak.value = ""; tk.value = "";
+    say("Saved on this computer.");
+    await loadStatus();
+    if (state.status?.ready) { flash(null); renderHome(); }
+  } },
+    h("label", {}, "Anthropic API key", ak),
+    h("label", {}, "Tavily API key (optional, free plan)", tk),
+    h("div", { class: "row" }, btn, msg));
+}
+function spendText() {
+  const sp = state.status?.spend;
+  if (!sp || !sp.model) return "";
+  if (!sp.estimable) return `Spending can't be estimated for ${sp.model}; check the Anthropic Console.`;
+  const limit = sp.budget_usd > 0 ? ` of your US$${sp.budget_usd.toFixed(2)} monthly limit` : "";
+  return `Anthropic spend this month: about US$${sp.month_usd.toFixed(2)}${limit} (estimate).`;
 }
 function providerPanel() {
   const st = state.status;
@@ -128,6 +165,8 @@ function providerPanel() {
       h("tbody", {}, st.providers.map((p) => h("tr", {},
         h("td", {}, p.name), h("td", {}, p.role),
         h("td", {}, p.configured ? "Configured" : `Not configured (${p.env})`))))),
+    st.ready ? h("details", { style: "margin-top:10px" }, h("summary", {}, "Add or change API keys"), keyForm()) : null,
+    h("p", { class: "small muted", style: "margin:10px 0 0" }, spendText()),
     h("p", { class: "small muted", style: "margin:10px 0 0" },
       `Database: ${st.database}. Page reading ${st.page_fetching ? "on" : "off"}${st.page_fetching && st.fetch_fallback ? " (Anthropic web fetch if this server can't connect)" : ""}`,
       st.robots_txt ? ", respecting robots.txt." : "."));
@@ -143,11 +182,12 @@ function updateCostHint() {
   const parts = [];
   const web = state.status?.web_search;
   if (web === "Tavily" && tav) parts.push(`${n} web searches (${credits} Tavily credits)`);
-  else if (web === "Anthropic web search") parts.push(`${n} Anthropic web searches (about US$0.01 each plus tokens)`);
+  else if (web === "Anthropic web search") parts.push(`${ai ? `${n} to ${n + 3}` : n} Anthropic web searches (about US$0.01 each plus tokens)`);
   else if (serp) parts.push(`${n} web searches`);
   if (serp) parts.push("1 Google Shopping search");
   if (ai) parts.push("AI reading on");
-  $("#cost-hint").textContent = parts.length ? `Uses ${parts.join(", ")}.` : "";
+  const spend = spendText();
+  $("#cost-hint").textContent = (parts.length ? `Uses ${parts.join(", ")}. ` : "") + spend;
 }
 
 // ------------------------------------------------------------------ routing
@@ -198,6 +238,10 @@ async function startResearch(opts = {}) {
   const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty,
     force: !!opts.force, comparison_id: opts.comparisonId ?? null }) });
   if (r.status === 503) { flash(setupNotice(r.body?.setup)); return; }
+  if (r.status === 402) {
+    flash(h("div", { class: "notice" }, h("h3", {}, "Monthly spending limit reached"), h("p", { style: "margin:0" }, r.body?.message || "")));
+    return;
+  }
   if (!r.ok) { flash(errorNotice({ message: r.body?.detail?.[0]?.msg || r.body?.detail || "The request was rejected." })); return; }
   if (r.body.duplicate) {
     const d = r.body.duplicate;
@@ -227,6 +271,7 @@ function trackJob(jobId, query) {
     box.querySelector(".step").textContent = j.step;
     if (j.status === "running") { setTimeout(tick, 700); return; }
     $("#search-btn").disabled = !(state.status && state.status.ready);
+    loadStatus();  // refresh this month's spend
     if (j.status === "done") { flash(null); location.hash = `#/c/${j.comparison_id}`; if (location.hash === `#/c/${j.comparison_id}`) openComparison(j.comparison_id); }
     else flash(errorNotice(j.error || {}));
   };
@@ -703,6 +748,9 @@ function sourcesTab(res) {
         h("dt", {}, "AI reading"), h("dd", {}, res.providers.llm ? `${res.providers.llm} (facts verified against source text)` : "off"),
         h("dt", {}, "Usage"), h("dd", {}, Object.entries(res.credits || {}).filter(([k]) => k !== "llm_usage").map(([k, v]) => `${k.replace(/_/g, " ")}: ${tokensText(v)}`).join(", ") || "n/a",
           res.credits?.llm_usage ? `; AI tokens: ${Object.entries(res.credits.llm_usage).filter(([, u]) => u).map(([k, u]) => `${k.replace(/_/g, " ")} ${tokensText(u)}`).join(", ")}` : ""),
+        h("dt", {}, "Estimated cost"), h("dd", {}, res.cost_estimate?.usd != null
+          ? `about US$${res.cost_estimate.usd.toFixed(2)} in Anthropic charges (list prices checked ${res.cost_estimate.prices_checked}; the Anthropic Console shows actual charges)`
+          : (res.credits?.llm_usage || res.credits?.anthropic_web_searches ? "not available for this model" : "no Anthropic charges")),
         h("dt", {}, "Supplier pages read"), h("dd", {}, `${(res.fetch?.attempted || 0) - (res.fetch?.failed || 0)} of ${res.fetch?.attempted || 0}`
           + (res.fetch?.via_anthropic ? ` (${res.fetch.via_anthropic} as text via Anthropic web fetch, because this server couldn't connect)` : "")
           + (res.fetch?.robots_respected ? "; robots.txt respected" : "")),

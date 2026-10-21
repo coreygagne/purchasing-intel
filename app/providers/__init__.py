@@ -22,15 +22,16 @@ __all__ = ["ProviderError", "SearchHit", "ShoppingListing", "ProviderSet", "buil
            "provider_status", "SETUP_INSTRUCTIONS"]
 
 SETUP_INSTRUCTIONS = {
-    "summary": "No search provider is configured, so no research can run. Nothing is simulated.",
+    "summary": "No search provider is connected yet, so no research can run. Nothing is simulated.",
     "steps": [
-        "Create a free Tavily account at https://app.tavily.com and copy the API key (starts with 'tvly-').",
-        "Copy .env.example to .env in the project folder.",
-        "Set TAVILY_API_KEY=<your key> in .env (optional: SERPAPI_API_KEY for Google Shopping Canada prices). "
-        "Alternatively, an ANTHROPIC_API_KEY alone enables Anthropic web search plus AI reading.",
-        "Restart the server (./run.sh). The status badge turns green when a provider is ready.",
+        "Get an Anthropic API key: sign in at https://console.anthropic.com, open API Keys and choose Create Key. "
+        "While you're there, set a monthly spend limit for the workspace so costs can't run away.",
+        "Paste the key in the box below and choose Save. It is checked with Anthropic and saved only on this "
+        "computer (in the app's .env file).",
+        "Optional, to cut search costs: a free Tavily key from https://app.tavily.com (1,000 free credits a month), "
+        "saved the same way.",
     ],
-    "docs": "See README.md > 'Search providers, keys and costs'.",
+    "docs": "Step-by-step help: GETTING-STARTED.md. Costs and options: README.md > 'Search providers, keys and costs'.",
 }
 
 
@@ -50,6 +51,7 @@ class ProviderSet:
         if isinstance(self.web, AnthropicSearchProvider):
             out["anthropic_web_searches"] = self.web.credits_used
             out["anthropic_search_tokens"] = dict(self.web.tokens)
+            out["anthropic_search_model"] = self.web.model
         return out
 
 

@@ -28,10 +28,15 @@ def build(unconfigured: bool = False):
     from app import fetch
     from tests.conftest import fake_resolve
     fetch.resolve_host = fake_resolve  # simulated hosts aren't in real DNS
-    db = Path(tempfile.mkdtemp()) / "ui-test.db"
+    tmp = Path(tempfile.mkdtemp())
     settings = Settings(tavily_api_key=None if unconfigured else "tvly-test-key",
-                        serpapi_api_key=None if unconfigured else "serp-test", database_path=db)
-    app = create_app(settings, transport=FakeWeb(serp_body=SERP_SHOPPING).transport())
+                        serpapi_api_key=None if unconfigured else "serp-test", database_path=tmp / "ui-test.db",
+                        env_file=tmp / ".env")  # keys saved in the harness never touch the project's .env
+
+    async def accept_any_key(key: str) -> None:  # the harness never contacts Anthropic
+        return None
+
+    app = create_app(settings, transport=FakeWeb(serp_body=SERP_SHOPPING).transport(), key_checker=accept_any_key)
     # Replace "/" so the page carries the test banner
     app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/"]
 
