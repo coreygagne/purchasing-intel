@@ -36,6 +36,18 @@ itself; the app does on startup.)
 
 Open http://127.0.0.1:8000. The badge at top right turns green ("Ready: Tavily…") when a provider is configured.
 
+**Trying it with only an Anthropic key.** Leave `TAVILY_API_KEY` empty and set `ANTHROPIC_API_KEY` in `.env`.
+The app then uses Anthropic web search for searching and Claude for reading, and the badge reads "Ready:
+Anthropic web search". This is the configuration verified live end to end (see Status). Adding a Tavily key
+later switches searching to Tavily automatically, with no code change. Cost on Claude Opus 5.5, as measured:
+- about US$0.72 per quick research, about US$1.00–1.30 per standard one;
+- so 50 standard researches a month comes to roughly US$50–65.
+
+To keep a trial predictable:
+- set a monthly spend limit for the key's workspace in the Anthropic Console;
+- use quick depth for routine items;
+- optionally set `PI_FETCH_MODEL=claude-haiku-5-5`.
+
 **The app has no login in Phase 1.** It binds to `127.0.0.1` (this computer only) by default. Only set
 `HOST=0.0.0.0` on a trusted internal network, or behind your company's sign-in proxy.
 
