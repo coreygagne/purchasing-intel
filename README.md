@@ -2,9 +2,13 @@
 
 A research tool for Midcontinent Terminal (Thunder Bay) that helps anyone find a better deal on almost any
 item without giving up essential quality, reliability or safety. Type a product name, model number, plain
-description or product link. The tool searches the web for suppliers, prices, reviews and wholesale channels,
-then shows a sourced comparison with two separate, explained recommendations: the lowest comparable price and
-the best overall value.
+description or product link. The tool asks a few optional questions where the answer would change the
+results, then searches Thunder Bay first and works outward (Northwestern Ontario, Canada, the US, overseas)
+across the buying channels that fit the item: local suppliers, distributors, dealers, manufacturers,
+wholesale/trade, B2B marketplaces, used listings, auctions and completed sales. It follows the leads it finds,
+lists suppliers with sourced contact details, and shows a sourced comparison: the best-supported option first,
+the lowest comparable price and the best overall value, picks by channel where the evidence supports them,
+the market value range, what each option really costs for your quantity, and what was and wasn't covered.
 
 It is a research tool, not a chatbot, and it never invents results. Every price shows where it came from and
 when, and each number carries a mark:
@@ -47,21 +51,22 @@ The badge at top right names the active search, e.g. "Ready: Anthropic web searc
   `PI_MONTHLY_BUDGET_USD` (default US$10). This month's spend is shown under the search bar, and each
   research shows its estimated cost.
 
-Estimated cost per research with only an Anthropic key:
-- about US$0.08–0.10 for Quick and US$0.12–0.15 for Standard, so the US$10 default covers roughly 70–100
-  researches a month;
-- most of it is the US$0.01 fee per web search.
+Estimated cost per research with only an Anthropic key (Anthropic web search):
+- about US$0.10–0.15 for Quick (8 to 11 searches) and US$0.17–0.27 for Standard (14 to 22), so the US$10
+  default covers roughly 40–90 researches a month;
+- most of it is the US$0.01 fee per web search. An expensive or higher-risk item is searched one level deeper
+  than chosen (see "What a research does"), which costs more.
 
-These figures come from the token counts measured in the Opus live runs, priced for Haiku. In the first
-live Haiku run (with Tavily for search) the Anthropic spend was about US$0.01. Each research shows its own
-estimate.
+These figures are estimates from the per-search costs and token counts measured in earlier live runs,
+priced for Haiku; the multi-round search plan hasn't been measured live yet. With Tavily for search the
+Anthropic spend was about US$0.01 per research. Each research shows its own estimate.
 
 For stronger reading, set `PI_ANTHROPIC_MODEL`. Only the Opus Quick figure was measured live:
 
 | Model | Quick | Standard |
 |---|---|---|
-| `claude-sonnet-5-5` | about US$0.40 (estimate) | about US$0.55–0.70 (estimate) |
-| `claude-opus-5-5` | about US$0.72 (measured) | about US$1.00–1.30 (estimate) |
+| `claude-sonnet-5-5` | about US$0.60–0.80 (estimate) | about US$1.00–1.50 (estimate) |
+| `claude-opus-5-5` | about US$1.00–1.40 (estimate; US$0.72 measured with the earlier 6-search plan) | about US$1.80–2.80 (estimate) |
 
 Also set a spend limit in the Anthropic Console: Anthropic enforces it, so it holds even if the app's
 estimate is off. Adding a Tavily key (free plan) moves searching off Anthropic.
@@ -89,14 +94,17 @@ summaries checked on 2026-10-20. **Verify on each vendor's site before committin
 
 **Cost per research** (Tavily: basic search = 1 credit, advanced = 2):
 
-| Depth | Web searches | Tavily credits | + SerpApi | Typical use |
+| Depth | Web searches (round 1 + follow-ups) | Tavily credits | + SerpApi | Typical use |
 |---|---|---|---|---|
-| Quick (preselected) | 3 (price, reviews, wholesale) | 3 | +1 search | fast price check |
-| Standard | 6 (+ suppliers, problems/recalls, specs) | 6 | +1 search | normal purchase |
-| Deep | 8, advanced (+ alternatives, cross-border USD) | 16 | +1 search | larger or riskier buys |
+| Quick (preselected) | 8 + up to 3 | 8–11 | 1 Shopping + 1 Maps | fast price check |
+| Standard | 14 + up to 8 | 14–22 | 1 Shopping + 2 Maps | normal purchase |
+| Deep | 20 + up to 12 + up to 8, advanced | 40–80 | 1 Shopping + 3 Maps | larger or riskier buys |
 
-So the Tavily free tier covers roughly 160 standard researches per month. Pay-as-you-go works out to about
-US$0.05 per standard research. With AI on, add roughly 15–25k input tokens and 2–8k output tokens
+Follow-up rounds stop early when a round finds no new supplier or price. An expensive item (about CAD 5,000
+or more, from your budget or the snippet prices) or a higher-risk category (vehicles, machinery, property,
+PPE, lifting and high-voltage items) is searched one level deeper than chosen, and the result says why. So
+the Tavily free tier covers roughly 90–120 Quick or 45–70 Standard researches per month, and the SerpApi
+free tier 60–125 researches. Pay-as-you-go Tavily works out to about US$0.11–0.18 per Standard research. With AI on, add roughly 15–25k input tokens and 2–8k output tokens
 (including thinking) per research. That's about **US$0.01 on the default Claude Haiku 5.5**, or
 US$0.10–0.30 on Claude Opus 5.5. This is an estimate; each research's details show its tokens and estimated
 cost. Use `PI_ANTHROPIC_MODEL` / `PI_ANTHROPIC_EFFORT` to change it.
@@ -104,8 +112,9 @@ cost. Use `PI_ANTHROPIC_MODEL` / `PI_ANTHROPIC_EFFORT` to change it.
 Re-running a search for the same item within 12 hours (`DUPLICATE_WINDOW_HOURS`) offers the saved result
 first, so credits aren't spent by accident. Changing import assumptions recalculates without searching.
 
-Supplier pages are also read directly (no credits) for schema.org price data. This respects robots.txt and
-is limited to `FETCH_MAX_PAGES` (10) per research. Many large retailers block automated reads; when that
+Supplier pages are also read directly (no credits) for schema.org price data and contact details. This
+respects robots.txt and is limited to `FETCH_MAX_PAGES` (10) product pages for Quick, 1.5x for Standard and 2x
+for Deep, plus 2/5/8 local or regional suppliers' own home and contact pages for missing emails. Many large retailers block automated reads; when that
 happens the source shows "page read: no (blocked)" and the price relies on search data.
 
 **Safety:** pasted links and search results are fetched only if they meet all of these, checked on every
@@ -145,11 +154,30 @@ same URL. The rules:
 
 ## What a research does
 
+0. **Clarify first** (`POST /api/clarify`, free: rules only, no search or AI). At most four questions, only
+   where the request leaves something open that changes the results: how much (length for cable, rope or
+   hose; quantity otherwise), voltage and conductor material for cable, whether used/auction is acceptable,
+   intended use, a budget for vehicles/machinery/property, and when it's needed. Every question can be
+   skipped. Answers are stored per request and not asked again; skipped questions become stated
+   assumptions in the result ("Quantity not given: ...").
 1. **Understand the request.** It extracts model/part numbers (e.g. `2767-20`, `DCF887B`). For a pasted link
    it reads the product page (schema.org name/brand/MPN), falling back to the URL's words if the page can't
-   be read. With AI on, it also suggests key specs and up to 3 extra queries.
-2. **Search** with Tavily (Canada-weighted for price/supplier queries) and optionally Google Shopping Canada.
-3. **Read supplier pages** for structured price, currency, availability, condition, ratings and specs.
+   be read. With AI on, it also suggests key specs, up to 3 extra queries and up to 3 alternative trade names
+   (search terms only, never evidence). The item's category (`app/discovery.py`) decides which buying
+   channels apply; channels that don't (wholesale for property, used for PPE) are listed with the reason.
+2. **Search in rounds** (`app/discovery.py`).
+   - Round 1: Thunder Bay first ("<item> Thunder Bay", local suppliers of the category, Yellow Pages), then
+     Canadian price, wholesale/bulk and manufacturer/dealer searches (always included), reviews,
+     Northwestern Ontario/Ontario suppliers, problems/recalls, used listings, B2B marketplaces (Alibaba,
+     Made-in-China, Global Sources), US prices, auctions/surplus, completed sales and specs, as far as the
+     depth's budget allows. Property requests search listings and completed sales instead. Google Shopping
+     Canada and Google Maps local business listings (SerpApi) run alongside.
+   - Later rounds follow leads: each local business's own website, suppliers seen without a price, brand
+     dealer networks near Thunder Bay, manufacturers' where-to-buy pages and alternative names, using
+     site-restricted searches. A round that finds no new supplier or price ends the research.
+3. **Read supplier pages** for structured price, currency, availability, condition, ratings, specs and contact
+   details (tel:/mailto: links, schema.org business data, page text). Local and regional suppliers without an
+   email are read on their own home and contact pages.
 4. **Build offers**, each labeled by evidence: page data > shopping listing > AI-verified page text > snippet.
    Quote-only suppliers are recorded as such.
 5. **Check equivalence.** Exact model, different variant/kit (e.g. `2767-22` vs `2767-20`),
@@ -176,7 +204,26 @@ same URL. The rules:
      rating (5 each). Every factor shows its evidence.
 8. **Surface** conflicts (e.g. page says $339.99, snippet says $349.99), outliers, gaps, recall mentions,
    wholesale/bulk/quote channels, spec differences, and Canadian import considerations.
-9. **Save** the comparison and every observed price (supplier, price, currency, CAD, URL, timestamp, pack
+9. **Supplier records** (`app/vendors.py`): every seller, local first, with its location (Thunder Bay,
+   Northwestern Ontario/Ontario, elsewhere in Canada, US, international) and what that's based on; address,
+   phone and email each copied from a named source (Google Maps listing, the supplier's own site, a directory
+   listing or search text) with the date seen; products seen; price status (published, quote on request, no
+   price seen); trade terms; and whether to ask for a quote. Quote-request drafts (`app/rfq.py`) are
+   prepared for those suppliers; nothing is sent.
+10. **Market value and true cost** (`app/market.py`): price ranges kept apart for new retail, new trade /
+    wholesale, used, auction bids in progress and completed sales, each with its count, low, median (only
+    from 3+ observations), high, dates, sources and differences. Order totals show unit price, the total for
+    your quantity or length, shipping/duty/brokerage as quoted, your assumption or unknown, and HST
+    separately (pre-tax totals are compared, since registrants recover GST/HST).
+11. **Plain recommendation** (`app/picks.py`): the best-supported option first, with how it compares on total
+    cost, evidence, delivery, warranty, compatibility and risk; then local, wholesale, used/auction and
+    international picks only where a same-item price supports one, and what quote or information is still
+    needed.
+12. **Coverage report** (`app/coverage.py`): channels and markets searched with their results, distinct
+    suppliers and offers, verified vs snippet-only prices, quote-only suppliers, pages that couldn't be
+    reached, channels ruled out and why, rounds and why it stopped, and next steps. It reports what the
+    searches found; it never claims every supplier was found or gives a completeness percentage.
+13. **Save** the comparison and every observed price (supplier, price, currency, CAD, URL, timestamp, pack
    size, specs, MOQ, shipping, warranty) to SQLite for price history.
 
 ### Canadian import handling
@@ -187,6 +234,11 @@ surtax %, import shipping and brokerage; totals using them are marked **Estimate
 
 - the 5% GST at the border, generally recoverable for registrants;
 - Ontario HST;
+- an import checklist: currency and rate, country of origin, HS classification, duty/surtax, freight and
+  insurance (ask for a DDP Thunder Bay quote or the Incoterm), brokerage, taxes, delivery to Thunder Bay,
+  warranty, and Canadian compliance for the category (CSA/cUL/cETL marks and ESA for electrical, CSA Z195 /
+  Z94.1 / Z96 and NIOSH for PPE, Transport Canada RIV for vehicles, WHMIS for chemicals, ISED for radios,
+  CRN for pressure parts). Unknown items stay unknown;
 - the US-origin surtaxes in force since 2026-09-08 (15/25/50% by classification; United States Surtax Order
   (2026), CBSA Customs Notices 26-23 and 25-11);
 - other-origin measures and brokerage fees;
@@ -198,6 +250,12 @@ Recommendations are always based on observed prices, never on speculative import
 ### Quality evidence
 
 - **Ratings** from page data or Google Shopping are listed with their source and never averaged.
+- **Themes** group the verbatim mentions (overheating, breakage, build quality, warranty...). A theme is
+  *recurring* only when two or more independent sites mention it; one site's mention is labelled *isolated*.
+  AI summary points carry the same label, counted from the sites whose quotes verified. Mentions of the
+  exact model are counted separately.
+- **Marketplace badges** ("Amazon's Choice", "Verified Supplier", "Trade Assurance") are flagged as the
+  marketplace's own labels: they don't prove quality, that an item is genuine, or who the seller is.
 - **Reported problems, praise and recall mentions** are shown as *verbatim sentences* with links, labeled by
   source type: professional review, user discussion (anecdotal), video, complaints site, government.
 - **With AI on**, recurring praise, criticism and reliability issues are summarized. A point is dropped if:
@@ -217,15 +275,20 @@ Recommendations are always based on observed prices, never on speculative import
 ## Using the app
 
 - **Search**: pick Quick / Standard / Deep, and optionally a quantity (used for MOQ checks and order totals).
-- **Results**: two recommendation cards, then "Watch out for" (conflicts, recalls, gaps) and "Ways to pay
-  less". Below that, the comparison table: choose **Details** on any row for the evidence text, FX and cost
-  breakdown. "Not compared" lists every excluded listing with its reason.
-- **Tabs**: Quality & reliability, Buying channels, Import & landed cost (assumptions form), Price history
-  (chart only with ≥3 comparable observations on ≥2 days; otherwise the raw observations), Sources & method
-  (queries, provider errors, credits/tokens used, pages read, limits).
+  Answer or skip the questions that appear (all optional), then research.
+- **Results**: the recommended (best-supported) option, the lowest-price and best-value cards, an "Options
+  side by side" table (best value, lowest cost, local, wholesale, used/auction, international), the market
+  value panel, "Watch out for" (conflicts, recalls, gaps), "Ways to pay less, and what to ask for", and what
+  was assumed. Below that, the comparison table: choose **Details** on any row for the evidence text, FX and
+  cost breakdown. "Not compared" lists every excluded listing with its reason.
+- **Tabs**: Suppliers & quotes (local first, sourced contacts, quote drafts with "Open in email" and "Copy
+  request"), Quality & reliability, Buying channels, Import & landed cost (assumptions form and import
+  checklist), Coverage, Price history (chart only with ≥3 comparable observations on ≥2 days; otherwise the
+  raw observations), Sources & method (queries with channel, market and round, provider errors,
+  credits/tokens used, pages read, limits).
 - **Save** names the comparison and pins it to the home page. **Search again** re-researches the same
   comparison and adds new price observations. **Export CSV / Excel**: the Excel file has Summary, Offers,
-  Sources, Quality evidence, Price history and Import & assumptions sheets.
+  Sources, Quality evidence, Price history, Suppliers, Market value, Coverage and Import & assumptions sheets.
 
 ---
 
@@ -312,8 +375,15 @@ Bank of Canada rates).
 app/
   main.py          FastAPI routes, background research jobs
   research.py      workflow orchestration; analyze() is pure and re-runnable
-  providers/       Tavily, SerpApi, Anthropic web search, Anthropic web fetch fallback
-                   (+ shared error taxonomy). Add a provider here.
+  clarify.py       clarify-first questions, stored answers, stated assumptions
+  discovery.py     research plan: categories, channels, markets (Thunder Bay first), follow-up rounds
+  vendors.py       supplier records with sourced contacts and location tiers
+  market.py        market value groups and order totals (tax shown separately)
+  picks.py         plain recommendation, channel picks, side-by-side comparison
+  coverage.py      what was searched, found and unreachable; next steps
+  rfq.py           quote-request drafts (never sent)
+  providers/       Tavily, SerpApi (Shopping, web, Google Maps), Anthropic web search, Anthropic web fetch
+                   fallback (+ shared error taxonomy). Add a provider here.
   fetch.py         polite page fetcher (robots.txt, size/time limits)
   extract.py       prices, currencies, pack sizes, MOQ, warranty, schema.org parsing, model matching
   evidence.py      sources and offers with evidence labels
@@ -412,6 +482,20 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
 - **Haiku 5.5 reading:** this run is its first live use. Its results looked usable, but one search isn't
   enough to judge the model.
 
+**Market research build (2026-10-21): built and tested against the simulated web only; not yet run live.**
+Clarify-first questions, the multi-round search plan (Thunder Bay first, channels by category, follow-up
+rounds), Google Maps local listings, contact capture, supplier records, market value groups, order totals
+with HST, channel picks, quote drafts, quality themes, the import checklist and the coverage report are
+covered by `tests/test_discovery.py` and `tests/test_clarify.py` (and the browser test). Not yet confirmed
+against real responses:
+- SerpApi's Google Maps results (`engine=google_maps`, `local_results` with `title`, `address`, `phone`,
+  `website`, `type`, `rating`, `reviews`, `data_cid`) are parsed as documented, but no real response has
+  been seen;
+- site-restricted searches: Tavily `include_domains` and Anthropic `allowed_domains` follow the documented
+  parameters; SerpApi adds `site:` terms;
+- how often real supplier pages publish contacts in a readable form, and the per-research cost of the
+  larger search plan (the figures above are estimates).
+
 **Not verified live:**
 - **Tavily and SerpApi from the build sandbox.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
   403), and no keys for them were available. Their documentation sites couldn't be opened from there, but
@@ -468,7 +552,14 @@ provider key is still needed to see real prices.
 **Known limitations:**
 
 - **Search coverage.** Search engines don't index every distributor, and many industrial distributors only
-  show prices after login or by quote. Those appear as "Quote required".
+  show prices after login or by quote. Those appear as "Quote required" or "No price seen", with a quote
+  draft. The coverage report lists what was searched; it can't list what search engines don't index.
+- **Local businesses without a website or map listing** can't be found online. Without a SerpApi key there
+  are no Google Maps listings, so local discovery relies on web search only (the result says so).
+- **Contacts** are only those written on a supplier's page, map listing, directory listing or search result.
+  A phone number on a national retailer's page is its general line, not a local branch.
+- **Categories and channels** are chosen by keyword rules (`app/discovery.py`). An item that matches no rule
+  is treated as a general purchase and searched across all channels.
 - **Price evidence without AI.** Prices come from page data, Google Shopping or single-price snippets.
   Pages that show prices only in free text aren't read unless AI is on.
 - **Equivalence by model number.** A model-number match is strong evidence, but kit contents,

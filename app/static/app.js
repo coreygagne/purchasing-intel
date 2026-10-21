@@ -3,7 +3,7 @@
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const state = { status: null, job: null, comparison: null, tab: "quality", history: null };
+const state = { status: null, job: null, comparison: null, tab: "suppliers", history: null };
 
 // ------------------------------------------------------------------ DOM helpers
 function h(tag, attrs, ...children) {
@@ -183,8 +183,11 @@ function providerPanel() {
 }
 function updateCostHint() {
   const depth = document.querySelector('input[name="depth"]:checked')?.value || "standard";
-  const n = { quick: 3, standard: 6, deep: 8 }[depth];
-  const credits = depth === "deep" ? n * 2 : n;
+  // web searches per round (see app/discovery.py DEPTH_BUDGET); follow-up rounds stop early when they find nothing new
+  const rounds = { quick: [8, 3], standard: [14, 8], deep: [20, 12, 8] }[depth];
+  const maps = { quick: 1, standard: 2, deep: 3 }[depth];
+  const n = `${rounds[0]} to ${rounds.reduce((a, b) => a + b, 0)}`;
+  const credits = depth === "deep" ? `${rounds[0] * 2} to ${rounds.reduce((a, b) => a + b, 0) * 2}` : n;
   const prov = state.status?.providers || [];
   const tav = prov.find((p) => p.name === "Tavily")?.configured;
   const serp = prov.find((p) => p.name === "SerpApi")?.configured;
@@ -192,12 +195,13 @@ function updateCostHint() {
   const parts = [];
   const web = state.status?.web_search;
   if (web === "Tavily" && tav) parts.push(`${n} web searches (${credits} Tavily credits)`);
-  else if (web === "Anthropic web search") parts.push(`${ai ? `${n} to ${n + 3}` : n} Anthropic web searches (about US$0.01 each plus tokens)`);
+  else if (web === "Anthropic web search") parts.push(`${n} Anthropic web searches (about US$0.01 each plus tokens)`);
   else if (serp) parts.push(`${n} web searches`);
-  if (serp) parts.push("1 Google Shopping search");
+  if (serp) parts.push(`1 Google Shopping and ${maps} Google Maps search${maps > 1 ? "es" : ""}`);
   if (ai) parts.push("AI reading on");
   const spend = spendText();
-  $("#cost-hint").textContent = (parts.length ? `Uses ${parts.join(", ")}. ` : "") + spend;
+  $("#cost-hint").textContent = (parts.length ? `Uses ${parts.join(", ")}. ` : "") + spend +
+    (depth !== "deep" ? " Expensive or higher-risk items are searched one level deeper." : "");
 }
 
 // ------------------------------------------------------------------ routing
@@ -245,8 +249,13 @@ async function startResearch(opts = {}) {
   const depth = opts.depth || document.querySelector('input[name="depth"]:checked').value;
   const qty = opts.quantity !== undefined ? opts.quantity : (Number($("#qty").value) || null);
   flash(null);
+  if (!opts.answers && !opts.comparisonId) {
+    // clarify first: a few optional questions, only when the answer would change the results (free, no search)
+    const c = await api("/api/clarify", { method: "POST", body: JSON.stringify({ query, quantity: qty }) });
+    if (c.ok && c.body.questions.length) { flash(clarifyCard(c.body, (answers) => startResearch({ ...opts, query, depth, quantity: qty, answers }))); return; }
+  }
   const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty,
-    force: !!opts.force, comparison_id: opts.comparisonId ?? null }) });
+    force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || null }) });
   if (r.status === 503) { flash(setupNotice(r.body?.setup)); return; }
   if (r.status === 402) {
     flash(h("div", { class: "notice" }, h("h3", {}, "Monthly spending limit reached"), h("p", { style: "margin:0" }, r.body?.message || "")));
@@ -260,13 +269,50 @@ async function startResearch(opts = {}) {
       h("p", { style: "margin:0 0 10px" }, `“${d.title}” was researched ${ago(d.last_researched_at)}. Open it, or search again (uses search credits).`),
       h("div", { class: "actions" },
         h("a", { class: "btn primary", href: `#/c/${d.id}`, onclick: () => flash(null) }, "Open saved result"),
-        h("button", { class: "btn", type: "button", onclick: () => startResearch({ query, depth, comparisonId: d.id }) }, "Search again"))));
+        h("button", { class: "btn", type: "button", onclick: () => startResearch({ query, depth, comparisonId: d.id, answers: opts.answers }) }, "Search again"))));
     return;
   }
   trackJob(r.body.job_id, query);
 }
 
 function flash(node) { $("#flash").replaceChildren(...(node ? [node] : [])); }
+
+// Optional questions before searching. Blank = skipped; the research states what it assumed instead.
+function clarifyCard(cq, go) {
+  const inputs = {};
+  const known = Object.entries(cq.known || {}).filter(([, v]) => v !== null && v !== "");
+  const form = h("form", { class: "clarify", onsubmit: (e) => { e.preventDefault(); go(collect()); } },
+    h("h3", {}, "A few questions first (all optional)"),
+    h("p", { class: "small muted", style: "margin:0 0 10px" }, cq.note),
+    cq.questions.map((q) => {
+      let input;
+      if (q.kind === "choice") {
+        input = h("div", { class: "choices", role: "radiogroup", "aria-label": q.text },
+          q.options.map((o) => h("label", {}, h("input", { type: "radio", name: `cq-${q.id}`, value: o }), h("span", {}, o))));
+      } else {
+        input = h("input", { type: q.kind === "number" ? "number" : "text", name: `cq-${q.id}`, placeholder: q.placeholder,
+          min: q.kind === "number" ? "0" : null, "aria-label": q.text });
+      }
+      inputs[q.id] = { q, input };
+      return h("div", { class: "cq" }, h("div", { class: "qt" }, q.text), input, h("div", { class: "why small muted" }, q.why));
+    }),
+    known.length ? h("p", { class: "small muted" }, "Using your earlier answers: ", known.map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join("; "), ".") : null,
+    h("div", { class: "actions" },
+      h("button", { class: "btn primary", type: "submit" }, "Research"),
+      h("button", { class: "btn", type: "button", onclick: () => go(Object.fromEntries(cq.questions.map((q) => [q.id, null]))) }, "Skip questions")));
+  function collect() {
+    const out = {};
+    for (const [id, { q, input }] of Object.entries(inputs)) {
+      let v = null;
+      if (q.kind === "choice") v = input.querySelector("input:checked")?.value || null;
+      else v = input.value.trim() || null;
+      if (v !== null && q.kind === "number") v = Number(v);
+      out[id] = v;
+    }
+    return out;
+  }
+  return h("div", { class: "notice info" }, form);
+}
 
 function trackJob(jobId, query) {
   const box = h("div", { class: "progress", role: "status", "aria-live": "polite" },
@@ -353,7 +399,7 @@ function header(comp, res) {
     h("div", { class: "actions" },
       saveBtn,
       h("button", { class: "btn", type: "button", title: "Runs a new search and adds new price observations (uses credits)",
-        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null }) }, "Search again"),
+        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null, answers: res.answers || {} }) }, "Search again"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.csv` }, "Export CSV"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.xlsx` }, "Export Excel")));
 }
@@ -392,6 +438,7 @@ function recCard(kind, rec, res, offersById) {
 
 function keyFindings(res, offersById) {
   const rec = res.recommendations;
+  const plain = res.recommendation;
   const watch = [];
   (res.conflicts || []).forEach((c) => watch.push(c.text));
   const q = res.quality || {};
@@ -399,9 +446,12 @@ function keyFindings(res, offersById) {
   (rec.notes || []).forEach((n) => { if (rec.lowest) watch.push(n); });
   (res.gaps || []).forEach((g) => watch.push(g));
   const shown = watch.slice(0, 5), more = watch.slice(5);
-  const opp = res.opportunities || [];
+  const opp = [...(plain?.needed || []), ...(res.opportunities || [])];
   return h("div", { class: "stack" },
+    plain ? leadCard(plain, res) : null,
     h("div", { class: "recs" }, recCard("lowest", rec.lowest, res, offersById), recCard("value", rec.best_value, res, offersById)),
+    plain && plain.comparison.length ? picksTable(plain) : null,
+    res.market_value ? marketPanel(res.market_value) : null,
     h("div", { class: "grid-2" },
       h("section", { class: `watch ${watch.length ? "" : "calm"}` },
         h("h3", {}, watch.length ? "Watch out for" : "No conflicts or gaps detected"),
@@ -409,9 +459,74 @@ function keyFindings(res, offersById) {
         more.length ? h("details", {}, h("summary", { class: "small" }, `${more.length} more`),
           h("ul", { class: "bullets" }, more.map((w) => h("li", {}, w)))) : null),
       h("section", { class: "watch calm" },
-        h("h3", {}, "Ways to pay less"),
-        opp.length ? h("ul", { class: "bullets" }, opp.map((t) => h("li", {}, t)))
-          : h("p", { class: "empty", style: "margin:0" }, "No wholesale, bulk or quote-only channels were found in this search."))));
+        h("h3", {}, "Ways to pay less, and what to ask for"),
+        opp.length ? h("ul", { class: "bullets" }, [...new Set(opp)].map((t) => h("li", {}, t)))
+          : h("p", { class: "empty", style: "margin:0" }, "No wholesale, bulk or quote-only channels were found in this search."))),
+    (res.stated_assumptions || []).length ? h("section", { class: "panel assumed" },
+      h("h3", {}, "Assumed (questions you skipped or didn't get)"),
+      h("ul", { class: "bullets" }, res.stated_assumptions.map((a) => h("li", {}, a)))) : null);
+}
+
+function leadCard(plain, res) {
+  if (!plain.lead) {
+    return h("section", { class: "lead none" }, h("div", { class: "kind" }, "Recommendation"),
+      h("div", { class: "head" }, "Not enough evidence to recommend a supplier yet"),
+      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))));
+  }
+  return h("section", { class: "lead" },
+    h("div", { class: "kind" }, "Recommended: best-supported option"),
+    h("div", { class: "head" }, plain.lead.supplier, " ", link(plain.lead.url, "Open listing", "small")),
+    h("ul", { class: "why" }, plain.lead.why.map((w) => h("li", {}, w))),
+    h("p", { class: "small muted", style: "margin:8px 0 0" }, plain.distinction));
+}
+
+function picksTable(plain) {
+  const rows = plain.comparison;
+  return h("section", { class: "panel" },
+    h("h3", {}, "Options side by side"),
+    h("div", { class: "table-wrap", style: "border:0" }, h("table", { class: "simple picks" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Option"), h("th", {}, "Supplier"), h("th", { class: "r" }, "Price"),
+        h("th", { class: "r" }, "Total before tax"), h("th", {}, "Evidence"), h("th", {}, "Delivery and warranty"),
+        h("th", {}, "Compatibility"), h("th", {}, "Risks"))),
+      h("tbody", {}, rows.map((r) => h("tr", {},
+        h("td", {}, r.labels.map((l, i) => [i ? h("br") : null, h("b", {}, l)])),
+        h("td", {}, link(r.url, r.supplier), r.tier ? h("div", { class: "sub" }, r.tier) : null),
+        h("td", { class: "r num" }, r.price || "n/a"),
+        h("td", { class: "r num" }, r.total_pre_tax != null ? [money(r.total_pre_tax, "CAD"), " ", mark("calculated"),
+          r.total_complete ? null : h("div", { class: "sub" }, `excludes ${r.total_unknown.join(", ")}`)] : "n/a"),
+        h("td", { class: "small" }, r.evidence, h("div", { class: "sub" }, `${r.confidence} confidence, ${day(r.observed_at)}`)),
+        h("td", { class: "small" }, r.delivery, h("div", { class: "sub" }, `Warranty: ${r.warranty}`)),
+        h("td", { class: "small" }, r.compatibility),
+        h("td", { class: "small" }, r.risks.length ? r.risks.join("; ") : "none noted")))))),
+    (plain.pick_notes || []).map((n) => h("p", { class: "small", style: "margin:8px 0 0" }, n)),
+    (plain.missing_picks || []).length ? h("ul", { class: "bullets small", style: "margin-top:8px" },
+      plain.missing_picks.map((m) => h("li", {}, m.text))) : null);
+}
+
+function marketPanel(mv) {
+  const unit = { per_ft: "/ft", per_unit: "/unit", listing: "" }[mv.basis] || "";
+  const v = (x) => x == null ? "n/a" : money(x, "CAD") + unit;
+  const o = mv.overall_new;
+  return h("section", { class: "panel" },
+    h("h3", {}, "Market value"),
+    o ? h("p", { style: "margin-top:0" }, o.supported
+      ? [`New, same item: ${v(o.low)} to ${v(o.high)}, median ${v(o.median)} `, mark("calculated"), ` from ${o.count} asking prices.`]
+      : o.note) : h("p", { style: "margin-top:0" }, "No same-item prices to build a market range from."),
+    mv.groups.length ? h("div", { class: "table-wrap", style: "border:0" }, h("table", { class: "simple" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Group"), h("th", { class: "r" }, "Observations"), h("th", { class: "r" }, "Low"),
+        h("th", { class: "r" }, "Median"), h("th", { class: "r" }, "High"), h("th", {}, "Seen"), h("th", {}, "Differences"))),
+      h("tbody", {}, mv.groups.map((g) => h("tr", {},
+        h("td", {}, g.label, h("details", {}, h("summary", { class: "small" }, "sources"),
+          h("ul", { class: "plain small" }, g.observations.map((ob) => h("li", {}, link(ob.url, ob.supplier), ` ${money(ob.price, ob.currency)} (${ob.price_label}, ${day(ob.observed_at)})`)),
+            g.set_aside.map((x) => h("li", { class: "muted" }, `Set aside: ${x.supplier} ${money(x.price, x.currency)}: ${x.reason}`))))),
+        h("td", { class: "r num" }, g.count),
+        h("td", { class: "r num" }, v(g.low)), h("td", { class: "r num" }, g.median != null ? v(g.median) : h("span", { class: "muted", title: g.median_note }, "n/a")),
+        h("td", { class: "r num" }, v(g.high)),
+        h("td", { class: "small" }, g.first_seen === g.last_seen ? g.first_seen : `${g.first_seen} to ${g.last_seen}`),
+        h("td", { class: "small" }, g.differences.join(" ") || "-")))))) : null,
+    (mv.indicative_ranges || []).length ? h("p", { class: "small" }, "Indicative ranges (not single prices): ",
+      mv.indicative_ranges.map((r, i) => [i ? "; " : "", link(r.url, r.supplier), ` ${money(r.low, r.currency)}–${r.high ?? "?"}${r.moq ? ` (${r.moq})` : ""}`])) : null,
+    h("p", { class: "small muted", style: "margin:8px 0 0" }, `Basis: ${mv.basis_label}. ${mv.method} `, mv.notes.join(" ")));
 }
 
 // ------------------------------------------------------------------ table
@@ -551,8 +666,8 @@ function specDiffs(res) {
 }
 
 // ------------------------------------------------------------------ tabs
-const TABS = [["quality", "Quality & reliability"], ["channels", "Buying channels"], ["import", "Import & landed cost"],
-  ["history", "Price history"], ["sources", "Sources & method"]];
+const TABS = [["suppliers", "Suppliers & quotes"], ["quality", "Quality & reliability"], ["channels", "Buying channels"],
+  ["import", "Import & landed cost"], ["coverage", "Coverage"], ["history", "Price history"], ["sources", "Sources & method"]];
 function tabs(res) {
   const panel = h("div", { class: "tabpanel", role: "tabpanel", id: "tabpanel" });
   const bar = h("div", { class: "tabs", role: "tablist" }, TABS.map(([k, label]) => h("button", {
@@ -563,12 +678,113 @@ function tabs(res) {
   return h("section", {}, bar, panel);
 }
 function fillTab(panel, res) {
-  const f = { quality: qualityTab, channels: channelsTab, import: importTab, history: historyTab, sources: sourcesTab }[state.tab];
+  const f = { suppliers: suppliersTab, quality: qualityTab, channels: channelsTab, import: importTab, coverage: coverageTab,
+    history: historyTab, sources: sourcesTab }[state.tab] || suppliersTab;
   panel.replaceChildren(f(res));
 }
 function srcRef(res, id) {
   const s = res.sources.find((x) => x.id === id);
   return s ? link(s.url, `${s.id} ${s.domain}`, "src-chip") : h("span", { class: "src-chip" }, id);
+}
+
+function contactLine(c, kind) {
+  const value = kind === "email" ? h("a", { href: `mailto:${c.value}` }, c.value)
+    : kind === "phone" ? h("a", { href: `tel:${c.value.replace(/[^\d+]/g, "")}` }, c.value) : c.value;
+  return h("div", {}, value, h("span", { class: "sub" }, ` from ${c.url ? "" : c.basis}`, c.url ? link(c.url, c.basis) : null,
+    c.seen_at ? `, seen ${day(c.seen_at)}` : ""));
+}
+function suppliersTab(res) {
+  const vs = res.vendors;
+  if (!vs) return h("p", { class: "empty" }, "This comparison was saved before supplier records existed. Search again to build them.");
+  const sum = res.vendor_summary || {};
+  const drafts = Object.fromEntries((res.rfq_drafts || []).map((d) => [d.vendor_id, d]));
+  const STATUS = { published: "Published price", quote_required: "Quote on request", no_price_seen: "No price seen" };
+  return h("div", { class: "stack" },
+    h("p", { class: "small muted", style: "margin:0" },
+      `${sum.total || 0} suppliers: ${sum.local || 0} in Thunder Bay, ${sum.with_contact || 0} with contact details, `,
+      `${sum.with_published_price || 0} with a published price, ${sum.quote_opportunities || 0} worth asking for a quote. `,
+      "Local suppliers first. Every contact shows where it was copied from and when; nothing is guessed."),
+    vs.length ? vs.map((v) => h("section", { class: `panel vendor tier-${v.tier || "none"}` },
+      h("div", { class: "vhead" },
+        h("h3", {}, v.website ? link(v.website, v.name) : v.name),
+        h("span", { class: `badge ${v.tier === "local" ? "exact" : ""}`, title: v.tier_basis || "" }, v.tier_label),
+        h("span", { class: `badge ${v.price_status === "published" ? "" : "warn"}` }, STATUS[v.price_status]),
+        v.sells_trade ? h("span", { class: "badge" }, "Trade / volume") : null),
+      h("div", { class: "sub" }, [v.type !== "unknown" ? v.type : null, v.map_category].filter(Boolean).join(", ") || "business type not stated",
+        v.tier_basis ? ` · location: ${v.tier_basis}` : ""),
+      h("div", { class: "vgrid" },
+        h("div", {},
+          h("h4", {}, "Contact"),
+          v.address ? contactLine(v.address, "address") : null,
+          v.phones.map((p) => contactLine(p, "phone")),
+          v.emails.map((e) => contactLine(e, "email")),
+          !v.address && !v.phones.length && !v.emails.length ? h("p", { class: "empty", style: "margin:0" }, "No contact details found in the sources.") : null,
+          v.map_listing ? h("div", { class: "small" }, link(v.map_listing, "Google Maps listing")) : null,
+          v.rating ? h("div", { class: "small muted" }, `${v.rating.value}/5 from ${v.rating.count ?? "?"} reviews (${v.rating.basis})`) : null),
+        h("div", {},
+          h("h4", {}, "What they showed"),
+          v.lowest ? h("div", {}, link(v.lowest.url, money(v.lowest.price, v.lowest.currency)), " ", h("span", { class: "sub" }, `${v.lowest.price_label}, ${day(v.lowest.observed_at)}${v.lowest.comparable ? "" : " (not comparable - see the offer)"}`)) : null,
+          v.products.length ? h("ul", { class: "plain small" }, v.products.map((p) => h("li", {}, p))) : h("p", { class: "empty", style: "margin:0" }, "No product listing for this item was found on their site."),
+          v.trade_signals.length ? h("div", { class: "small" }, "Trade terms seen: ", v.trade_signals.map((t, i) => [i ? "; " : "", `“${t.text}”`])) : null,
+          v.badges.length ? h("div", { class: "small muted" }, `Marketplace badge: ${v.badges.join(", ")} (the marketplace's own label, not proof of quality or seller identity)`) : null),
+        h("div", {},
+          h("h4", {}, "Ask for a quote"),
+          v.quote_opportunity ? h("p", { class: "small", style: "margin:0 0 6px" }, `Why: ${v.quote_reasons.join("; ")}.`) : h("p", { class: "empty", style: "margin:0" }, "Published price available."),
+          drafts[v.id] ? rfqBox(drafts[v.id]) : null))))
+      : h("p", { class: "empty" }, "No suppliers were identified."));
+}
+function rfqBox(d) {
+  const ta = h("textarea", { class: "rfq", rows: "9", readonly: true, "aria-label": `Quote request to ${d.vendor}` }, d.body);
+  const msg = h("span", { class: "small muted", role: "status" });
+  return h("div", {},
+    h("div", { class: "actions" },
+      d.mailto ? h("a", { class: "btn primary", href: d.mailto }, "Open in email") : null,
+      h("button", { class: "btn", type: "button", onclick: async () => {
+        try { await navigator.clipboard.writeText(`Subject: ${d.subject}\n\n${d.body}`); msg.textContent = "Copied."; }
+        catch { ta.select(); msg.textContent = "Select and copy the text."; }
+      } }, "Copy request"), msg),
+    h("p", { class: "small muted", style: "margin:6px 0" }, d.to ? `To ${d.to} (${d.to_basis}). ` : d.phone ? `No email found: call ${d.phone} (${d.phone_basis}). ` : "No email or phone found: use their website's contact form. ",
+      "Nothing is sent automatically."),
+    h("details", {}, h("summary", { class: "small" }, "Show the draft"), ta));
+}
+
+function coverageTab(res) {
+  const cov = res.coverage;
+  if (!cov) return h("p", { class: "empty" }, "This comparison was saved before the coverage report existed. Search again to build it.");
+  const f = cov.found;
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" }, h("h3", {}, "What was found"),
+      h("dl", { class: "kv" },
+        h("dt", {}, "Suppliers"), h("dd", {}, `${f.vendors} distinct (${f.local_vendors} in Thunder Bay, ${f.map_listings} from map listings)`),
+        h("dt", {}, "Offers"), h("dd", {}, `${f.offers} listings, ${f.priced_offers} with a price: ${f.verified_prices} verified on the page or listing, ${f.snippet_prices} from search snippets only`),
+        h("dt", {}, "Quotes needed"), h("dd", {}, `${f.quote_required_vendors} quote on request; ${f.vendors_without_price} showed no price for this item`),
+        h("dt", {}, "Other channels"), h("dd", {}, `${f.trade_prices} trade/wholesale prices, ${f.used_listings} used, ${f.auction_bids} auction bids, ${f.completed_sales} completed sales`),
+        cov.deepened ? [h("dt", {}, "Depth"), h("dd", {}, cov.deepened)] : null,
+        h("dt", {}, "Rounds"), h("dd", {}, cov.rounds.map((r) => `round ${r.round}: ${r.searches} searches, ${r.new_supplier_count} new suppliers, ${r.new_prices} new prices`).join("; ") || "n/a",
+          cov.stop_reason ? `. Stopped: ${cov.stop_reason}.` : ""),
+        h("dt", {}, "Local search"), h("dd", {}, cov.local_search || "n/a")),
+      h("p", { class: "small muted", style: "margin:10px 0 0" }, cov.disclaimer)),
+    h("section", { class: "panel" }, h("h3", {}, "Channels searched"),
+      h("div", { class: "table-wrap", style: "border:0" }, h("table", { class: "simple" },
+        h("thead", {}, h("tr", {}, h("th", {}, "Channel"), h("th", { class: "r" }, "Searches"), h("th", { class: "r" }, "Results"),
+          h("th", { class: "r" }, "Sellers"), h("th", { class: "r" }, "Offers (priced)"), h("th", { class: "r" }, "Failed"))),
+        h("tbody", {}, cov.channels.map((c) => h("tr", {}, h("td", {}, c.label), h("td", { class: "r num" }, c.searches),
+          h("td", { class: "r num" }, c.results), h("td", { class: "r num" }, c.sellers),
+          h("td", { class: "r num" }, `${c.offers} (${c.priced})`), h("td", { class: "r num" }, c.failed || "")))))),
+      cov.not_relevant.length ? h("div", {}, h("h4", {}, "Not searched because they don't apply"),
+        h("ul", { class: "bullets small" }, cov.not_relevant.map((c) => h("li", {}, `${c.label}: ${c.reason}.`)))) : null,
+      cov.relevant_not_searched.length ? h("p", { class: "small" }, "Relevant but not reached within this depth's budget: ",
+        cov.relevant_not_searched.map((c) => c.label.toLowerCase()).join(", "), ".") : null),
+    h("section", { class: "panel" }, h("h3", {}, "Markets"),
+      h("table", { class: "simple" }, h("thead", {}, h("tr", {}, h("th", {}, "Market"), h("th", { class: "r" }, "Searches"), h("th", { class: "r" }, "Results"), h("th", { class: "r" }, "Sellers"))),
+        h("tbody", {}, cov.markets.map((m) => h("tr", {}, h("td", {}, m.label), h("td", { class: "r num" }, m.searches), h("td", { class: "r num" }, m.results), h("td", { class: "r num" }, m.sellers)))))),
+    cov.inaccessible.length || cov.failed_searches.length ? h("section", { class: "panel" }, h("h3", {}, "Couldn't be reached"),
+      h("p", { class: "small muted", style: "margin-top:0" }, "A page that couldn't be read may still sell the item."),
+      h("ul", { class: "bullets small" },
+        cov.inaccessible.map((x) => h("li", {}, link(x.url, x.domain), `: ${x.reason}`)),
+        cov.failed_searches.map((x) => h("li", {}, `Search “${x.query}” failed: ${x.error || "error"}`)))) : null,
+    cov.next_steps.length ? h("section", { class: "watch" }, h("h3", {}, "Gaps and next steps"),
+      h("ul", { class: "bullets" }, cov.next_steps.map((n) => h("li", {}, n)))) : null);
 }
 
 function qualityTab(res) {
@@ -585,9 +801,17 @@ function qualityTab(res) {
       summ.overall_note ? h("p", {}, h("span", { class: "muted" }, `${summ.overall_note_label || "AI comment"}: `), summ.overall_note) : null,
       [["praise", "Recurring praise"], ["criticism", "Recurring criticism"], ["reliability_issues", "Reliability issues"]].map(([k, label]) =>
         h("div", {}, h("h4", {}, label), (summ[k] || []).length ? (summ[k] || []).map((p) => h("div", { class: "point" },
-          h("div", { class: "p" }, p.point, " ", p.source_ids.map((id) => [" ", srcRef(res, id)])),
+          h("div", { class: "p" }, p.point, " ", p.support ? h("span", { class: `badge ${p.support.pattern ? "exact" : "warn"}` }, p.support.label) : null,
+            " ", p.source_ids.map((id) => [" ", srcRef(res, id)])),
           p.quotes.map((qt) => h("div", { class: "q" }, h("q", {}, qt))))) : h("p", { class: "empty" }, "None found in the sources.")))) :
       h("p", { class: "small muted" }, "AI summary is off (no Anthropic key configured). Below are the review sources and verbatim excerpts found by search."),
+    (q.themes || []).length ? h("section", { class: "panel" }, h("h3", {}, "Themes in reviews and discussions"),
+      h("p", { class: "small muted", style: "margin-top:0" }, q.themes_note),
+      h("table", { class: "simple" }, h("tbody", {}, q.themes.map((t) => h("tr", {},
+        h("td", {}, h("b", {}, t.theme), h("div", { class: "sub" }, t.kind === "concern" ? "concern" : "praise")),
+        h("td", {}, h("span", { class: `badge ${t.pattern ? (t.kind === "concern" ? "warn" : "exact") : ""}` }, t.label),
+          h("div", { class: "sub" }, `${t.mentions} mention(s), ${t.exact_model_mentions} about the exact model`)),
+        h("td", { class: "small" }, t.quotes.map((qt, i) => [i ? h("br") : null, h("q", {}, qt.quote), " ", link(qt.url, qt.domain, "src-chip")]))))))) : null,
     h("div", { class: "grid-2" },
       h("section", { class: "panel" }, h("h3", {}, "Customer ratings"),
         h("p", { class: "small muted", style: "margin-top:0" }, q.ratings_note),
@@ -678,6 +902,12 @@ function importTab(res) {
         : h("p", { class: "empty" }, "All priced listings are from Canadian sellers.")),
     Object.keys(res.fx || {}).length ? h("section", { class: "panel" }, h("h3", {}, "Exchange rates used"),
       h("ul", { class: "plain" }, Object.entries(res.fx).map(([cur, r]) => h("li", {}, `1 ${cur} = ${r.rate_to_cad} CAD `, mark("quoted"), ` ${r.source}, ${r.rate_date}`)))) : null,
+    res.import_checklist ? h("section", { class: "panel" }, h("h3", {}, res.import_checklist.applies ? "Import checklist" : "Import checklist (no import listings priced, shown for reference)"),
+      h("p", { class: "small muted", style: "margin-top:0" }, res.import_checklist.note, ` Reviewed ${res.import_checklist.reviewed}.`),
+      h("table", { class: "simple" }, h("tbody", {}, res.import_checklist.items.map((i) => h("tr", {},
+        h("td", {}, h("b", {}, i.topic)), h("td", {}, h("span", { class: `badge ${i.status === "known" ? "exact" : (i.status === "unknown" ? "warn" : "")}` },
+          { known: "Known", unknown: "Unknown", assumption: "Your assumption", rule: "Rule", check: "Check" }[i.status] || i.status)),
+        h("td", { class: "small" }, i.text, i.link ? [" ", link(i.link, "Official source")] : null)))))) : null,
     h("section", { class: "panel" }, h("h3", {}, "Canadian import considerations"),
       h("ul", { class: "plain quote-list" }, (res.import_notes || []).map((n) => h("li", {}, h("b", {}, n.topic), ". ", n.text,
         n.link ? [" ", link(n.link, "Official source")] : null)))));
@@ -778,8 +1008,10 @@ function sourcesTab(res) {
           + (res.fetch?.robots_respected ? "; robots.txt respected" : "")),
         h("dt", {}, "Evidence"), h("dd", {}, `${counts.sources} sources, ${counts.offers} listings, ${counts.priced} with prices, ${counts.comparable} comparable`))),
     h("section", { class: "panel" }, h("h3", {}, "Searches run"),
-      h("table", { class: "simple" }, h("thead", {}, h("tr", {}, h("th", {}, "Query"), h("th", {}, "Purpose"), h("th", {}, "Provider"), h("th", {}, "Result"))),
-        h("tbody", {}, res.queries.map((q) => h("tr", {}, h("td", {}, q.query), h("td", {}, q.purpose.replace("_", " ")), h("td", {}, q.provider || ""),
+      h("table", { class: "simple" }, h("thead", {}, h("tr", {}, h("th", {}, "Query"), h("th", {}, "Channel / market"), h("th", {}, "Provider"), h("th", {}, "Result"))),
+        h("tbody", {}, res.queries.map((q) => h("tr", {}, h("td", {}, q.query, q.domains?.length ? h("div", { class: "sub" }, `on ${q.domains.join(", ")}`) : null,
+          q.lead ? h("div", { class: "sub" }, `follow-up: ${q.lead}`) : null),
+          h("td", {}, (q.channel || q.purpose).replace(/_/g, " "), h("div", { class: "sub" }, [q.market, q.round ? `round ${q.round}` : null].filter(Boolean).join(", "))), h("td", {}, q.provider || ""),
           h("td", {}, q.status === "ok" ? `${q.result_count} results` : h("span", { style: "color:var(--risk)" }, `${q.status}: ${q.error?.message || ""}`))))))),
     h("section", { class: "panel" }, h("h3", {}, `Sources (${res.sources.length})`),
       h("div", { class: "table-wrap", style: "border:0" }, h("table", { class: "simple" },

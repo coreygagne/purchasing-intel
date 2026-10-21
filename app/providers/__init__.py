@@ -90,7 +90,7 @@ def provider_status(settings: Settings) -> dict[str, Any]:
     providers = [
         {"name": "Tavily", "role": "Web search (suppliers, reviews, specs, wholesale)",
          "configured": bool(settings.tavily_api_key), "env": "TAVILY_API_KEY", "required": "one of Tavily or SerpApi"},
-        {"name": "SerpApi", "role": "Google Shopping Canada listings (structured prices); also web search if Tavily is absent",
+        {"name": "SerpApi", "role": "Google Shopping Canada listings (structured prices) and Google Maps listings of local businesses; also web search if Tavily is absent",
          "configured": bool(settings.serpapi_api_key), "env": "SERPAPI_API_KEY", "required": "optional"},
         {"name": "Claude (Anthropic)", "role": "Optional: understands plain-language requests, extracts prices/specs from page text, summarizes reviews. Every extracted fact is verified against source text. Also provides Anthropic web search when no other search key is set.",
          "configured": settings.llm_enabled, "env": "ANTHROPIC_API_KEY", "required": "optional",

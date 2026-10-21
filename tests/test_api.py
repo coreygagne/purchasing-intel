@@ -96,9 +96,12 @@ def test_full_workflow_save_reopen_export(tmp_path):
         assert "KMS Tools" in csv_text and "Advertised price" in csv_text
         xbytes = c.get(f"/api/comparisons/{cid}/export.xlsx").content
         wb = load_workbook(io.BytesIO(xbytes))
-        assert wb.sheetnames == ["Summary", "Offers", "Sources", "Quality evidence", "Price history",
-                                 "Import & assumptions"]
+        assert wb.sheetnames == ["Summary", "Offers", "Sources", "Quality evidence", "Price history", "Suppliers",
+                                 "Market value", "Coverage", "Import & assumptions"]
         assert wb["Offers"].max_row == len(res["offers"]) + 1
+        assert wb["Suppliers"].max_row == len(res["vendors"]) + 1
+        summary = " ".join(str(c.value) for row in wb["Summary"].iter_rows() for c in row if c.value)
+        assert "RECOMMENDED (BEST-SUPPORTED)" in summary
 
 
 def test_assumptions_recalculate_without_new_search(tmp_path):

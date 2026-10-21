@@ -198,3 +198,24 @@ SERP_SHOPPING = {
          "second_hand_condition": "used"},
     ],
 }
+
+
+# A fictional Thunder Bay supplier: a Google Maps listing, its own site with a contact page, and a product page
+# that only a search restricted to its site finds. 555-01xx phone numbers are reserved for fiction.
+LOCAL_SITE = "https://www.northerntoolsupply-example.ca/"
+SERP_MAPS = {"local_results": [
+    {"title": "Northern Tool Supply Ltd", "address": "123 Memorial Ave, Thunder Bay, ON P7B 3Z9",
+     "phone": "(807) 555-0142", "website": LOCAL_SITE, "type": "Tool store", "rating": 4.5, "reviews": 37,
+     "data_cid": "1234567890"},
+]}
+
+
+def with_local_supplier(fw: FakeWeb) -> FakeWeb:
+    fw.serp_maps_body = SERP_MAPS
+    fw.pages[LOCAL_SITE] = (200, '<html><body><a href="/contact-us">Contact us</a> Call 807-555-0142</body></html>')
+    fw.pages[LOCAL_SITE + "contact-us"] = (200, '<html><body><a href="mailto:sales@northerntoolsupply-example.ca">'
+                                                "Email sales</a> 123 Memorial Ave, Thunder Bay, ON P7B 3Z9</body></html>")
+    fw.tavily_results["local_site"] = [tavily_result(
+        LOCAL_SITE + "acme-tx-4400", "Acme TX-4400 Torque Widget - Northern Tool Supply",
+        "Acme TX-4400 torque widget. Call for trade pricing on orders of 5 or more.")]
+    return fw

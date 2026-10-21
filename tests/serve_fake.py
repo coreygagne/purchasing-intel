@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse
 
 from app.config import Settings
 from app.main import STATIC_DIR, create_app
-from tests.fakeweb import SERP_SHOPPING, FakeWeb
+from tests.fakeweb import SERP_SHOPPING, FakeWeb, with_local_supplier
 
 BANNER = ('<div style="background:#a63a2a;color:#fff;padding:6px 16px;font:600 13px/1.4 sans-serif">'
           "TEST HARNESS: simulated web data (fictional products and prices). Not real research.</div>")
@@ -36,7 +36,7 @@ def build(unconfigured: bool = False):
     async def accept_any_key(key: str) -> None:  # the harness never contacts Anthropic
         return None
 
-    app = create_app(settings, transport=FakeWeb(serp_body=SERP_SHOPPING).transport(), key_checker=accept_any_key)
+    app = create_app(settings, transport=with_local_supplier(FakeWeb(serp_body=SERP_SHOPPING)).transport(), key_checker=accept_any_key)
     # Replace "/" so the page carries the test banner
     app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/"]
 

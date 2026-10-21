@@ -119,6 +119,17 @@ def comparison_xlsx(comparison: dict[str, Any], history: list[dict[str, Any]]) -
         ["Comparison basis", rec.get("basis") or "n/a"],
         [],
     ]
+    plain = result.get("recommendation") or {}
+    if plain.get("lead"):
+        lines.append(["RECOMMENDED (BEST-SUPPORTED)", plain["lead"]["supplier"]])
+        lines.append(["Link", plain["lead"]["url"]])
+        for w in plain["lead"]["why"]:
+            lines.append(["", w])
+        lines.append([])
+    for n in plain.get("needed") or []:
+        lines.append(["Needed", n])
+    for a in result.get("stated_assumptions") or []:
+        lines.append(["Assumed", a])
     for key, label in (("lowest", "LOWEST COMPARABLE PRICE"), ("best_value", "BEST OVERALL VALUE")):
         r = rec.get(key)
         if r:
@@ -186,11 +197,53 @@ def comparison_xlsx(comparison: dict[str, Any], history: list[dict[str, Any]]) -
                                  "Price basis", "Match", "Condition", "URL"],
            [[h["observed_at"], h["supplier"], h["product_title"], h["price"], h["currency"], h["price_cad"],
              h["price_basis"], h["match_level"], h["condition"], h["url"]] for h in history], {3: 50, 10: 60})
+    if result.get("vendors") is not None:
+        def contacts(items: list[dict[str, Any]]) -> str:
+            return "; ".join(f"{c['value']} ({c['basis']}, {(c.get('seen_at') or '')[:10]})" for c in items)
+        drafts = {d["vendor_id"]: d for d in result.get("rfq_drafts") or []}
+        _sheet(wb, "Suppliers", ["ID", "Supplier", "Location", "Location basis", "Type", "Website", "Address",
+                                 "Address source", "Phones (source, date seen)", "Emails (source, date seen)",
+                                 "Price status", "Lowest price", "Currency", "Price evidence", "Products seen",
+                                 "Trade terms seen", "Quote opportunity", "Quote request draft"],
+               [[v["id"], v["name"], v["tier_label"], v["tier_basis"], v["type"], v["website"],
+                 (v.get("address") or {}).get("value"), (v.get("address") or {}).get("basis"),
+                 contacts(v["phones"]), contacts(v["emails"]), v["price_status"].replace("_", " "),
+                 (v.get("lowest") or {}).get("price"), (v.get("lowest") or {}).get("currency"),
+                 (v.get("lowest") or {}).get("price_label"), " | ".join(v["products"]),
+                 "; ".join(t["text"] for t in v["trade_signals"]), "; ".join(v["quote_reasons"]),
+                 (drafts.get(v["id"]) or {}).get("body")] for v in result["vendors"]],
+               {2: 30, 4: 34, 7: 40, 9: 40, 10: 40, 15: 50, 18: 70})
+    mv = result.get("market_value")
+    if mv:
+        mrows = []
+        for g in mv["groups"]:
+            mrows.append([g["label"], g["count"], g["low"], g["median"] if g["median"] is not None else g["median_note"],
+                          g["high"], f"{g['first_seen']} to {g['last_seen']}", " ".join(g["differences"]),
+                          "; ".join(f"{o['supplier']} {o['currency']} {o['price']} ({o['price_label']}) {o['url']}"
+                                    for o in g["observations"])])
+        mrows.append([f"Basis: {mv['basis_label']}", "", "", "", "", "", mv["method"], " ".join(mv["notes"])])
+        _sheet(wb, "Market value", ["Group", "Observations", "Low (CAD)", "Median (CAD)", "High (CAD)", "Seen",
+                                    "Differences", "Observations (source)"], mrows, {1: 50, 7: 50, 8: 90})
+    cov = result.get("coverage")
+    if cov:
+        crow = [["Channel", c["label"], c["searches"], c["results"], c["sellers"], c["offers"], c["priced"], c["failed"]]
+                for c in cov["channels"]]
+        crow += [["Market", m["label"], m["searches"], m["results"], m["sellers"], "", "", ""] for m in cov["markets"]]
+        crow += [["Not relevant", c["label"], "", "", "", "", "", c["reason"]] for c in cov["not_relevant"]]
+        crow += [["Couldn't be reached", x["domain"], "", "", "", "", "", x["reason"]] for x in cov["inaccessible"]]
+        crow += [["Found", k.replace("_", " "), v, "", "", "", "", ""] for k, v in cov["found"].items()]
+        crow += [["Next step", n, "", "", "", "", "", ""] for n in cov["next_steps"]]
+        crow += [["Stopped", cov.get("stop_reason") or "", "", "", "", "", "", cov.get("deepened") or ""],
+                 ["Note", cov["disclaimer"], "", "", "", "", "", ""]]
+        _sheet(wb, "Coverage", ["Kind", "Item", "Searches", "Results", "Sellers", "Offers", "Priced", "Failed / note"],
+               crow, {2: 60, 8: 60})
     a = comparison.get("assumptions") or result.get("assumptions") or {}
     arows = [[k, v if v is not None else "not set"] for k, v in a.items()]
     arows += [[n["topic"], n["text"]] for n in result.get("import_notes", [])]
     arows += [[f"FX {cur}", f"1 {cur} = {r['rate_to_cad']} CAD ({r['source']}, {r['rate_date']})"]
               for cur, r in (result.get("fx") or {}).items()]
+    arows += [[f"Checklist: {i['topic']} ({i['status']})", i["text"]]
+              for i in (result.get("import_checklist") or {}).get("items", [])]
     _sheet(wb, "Import & assumptions", ["Item", "Value / note"], arows, {1: 40, 2: 120})
     buf = io.BytesIO()
     wb.save(buf)

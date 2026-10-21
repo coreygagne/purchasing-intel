@@ -318,3 +318,34 @@ form.assume input { padding: 7px 9px; border: 1px solid var(--rule-strong); bord
 .tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--paper); padding: 6px 9px; border-radius: 4px; font-size: 13px; z-index: 10; max-width: 260px; }
 
 footer.foot { margin: 40px 0 30px; color: var(--ink-3); font-size: 13px; }
+
+/* ------------------------------------------------------------ clarify, lead, suppliers */
+form.clarify { display: grid; gap: 12px; }
+form.clarify .cq { display: grid; gap: 5px; max-width: 640px; }
+form.clarify .qt { font-weight: 650; }
+form.clarify input[type="text"], form.clarify input[type="number"] {
+  padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--sheet); max-width: 420px; }
+.choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.choices label { position: relative; }
+.choices input { position: absolute; opacity: 0; }
+.choices span { display: block; padding: 6px 12px; border: 1px solid var(--rule-strong); border-radius: var(--radius); cursor: pointer; font-size: 14px; background: var(--sheet); }
+.choices input:checked + span { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.choices input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.lead { background: var(--sheet); border: 1px solid var(--rule); border-left: 6px solid var(--quoted); border-radius: var(--radius); padding: 16px 20px; }
+.lead.none { border-left-color: var(--est); }
+.lead .kind { font-size: 14px; color: var(--ink-2); font-weight: 600; }
+.lead .head { font-size: 22px; font-weight: 800; font-variation-settings: "wdth" 112; margin: 4px 0 2px; overflow-wrap: anywhere; }
+.lead .why { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.lead .why li + li { margin-top: 4px; }
+.panel.assumed { border-left: 5px solid var(--est); }
+table.picks td:first-child { min-width: 150px; }
+
+.vendor.tier-local { border-left: 5px solid var(--quoted); }
+.vhead { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.vhead h3 { margin: 0; overflow-wrap: anywhere; }
+.vgrid { display: grid; gap: 6px 26px; grid-template-columns: 1fr; margin-top: 4px; }
+@media (min-width: 900px) { .vgrid { grid-template-columns: 1fr 1fr 1.2fr; } }
+.vgrid > div > div { overflow-wrap: anywhere; }
+textarea.rfq { width: 100%; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 10px;
+  border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink); resize: vertical; }

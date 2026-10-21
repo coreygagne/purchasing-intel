@@ -12,27 +12,11 @@ from app.config import Settings
 from app.evidence import Offer
 from app.main import create_app
 from app.market import market_value, order_totals
-from tests.fakeweb import SERP_SHOPPING, FakeWeb, tavily_result
+from tests.fakeweb import LOCAL_SITE, SERP_SHOPPING, FakeWeb, tavily_result, with_local_supplier
 from tests.test_api import research
 
-LOCAL_SITE = "https://www.northerntoolsupply-example.ca/"
-SERP_MAPS = {"local_results": [
-    {"title": "Northern Tool Supply Ltd", "address": "123 Memorial Ave, Thunder Bay, ON P7B 3Z9",
-     "phone": "(807) 555-0142", "website": LOCAL_SITE, "type": "Tool store", "rating": 4.5, "reviews": 37,
-     "data_cid": "1234567890"},
-]}
-
-
 def local_web() -> FakeWeb:
-    fw = FakeWeb(serp_body=SERP_SHOPPING, serp_maps_body=SERP_MAPS)
-    fw.pages[LOCAL_SITE] = (200, '<html><body><a href="/contact-us">Contact us</a> Call 807-555-0142</body></html>')
-    fw.pages[LOCAL_SITE + "contact-us"] = (200, '<html><body><a href="mailto:sales@northerntoolsupply-example.ca">'
-                                                "Email sales</a> 123 Memorial Ave, Thunder Bay, ON P7B 3Z9</body></html>")
-    # only a search restricted to the local supplier's own site finds this page
-    fw.tavily_results["local_site"] = [tavily_result(
-        LOCAL_SITE + "acme-tx-4400", "Acme TX-4400 Torque Widget - Northern Tool Supply",
-        "Acme TX-4400 torque widget. Call for trade pricing on orders of 5 or more.")]
-    return fw
+    return with_local_supplier(FakeWeb(serp_body=SERP_SHOPPING))
 
 
 def run(tmp_path, fw, **kw):
@@ -277,3 +261,21 @@ def test_import_checklist_leaves_unknowns_unknown(tmp_path):
     assert "USD at 1.38" in items["Currency"]["text"]
     assert items["Electrical safety mark"]["status"] == "check"  # tools category compliance
     assert res["compliance"][0]["topic"] == "Electrical safety mark"
+
+
+def test_comparisons_saved_before_this_version_are_reanalysed(tmp_path):
+    from app.research import ANALYSIS_VERSION, reanalyze
+    res = run(tmp_path, local_web())
+    old = {k: v for k, v in res.items() if k not in ("plan", "local_businesses", "contact_pages", "answers",
+                                                     "stated_assumptions", "vendors", "coverage", "market_value",
+                                                     "recommendation", "rfq_drafts", "import_checklist")}
+    for s in old["sources"]:
+        for k in ("channels", "markets", "round", "contacts", "location", "badges"):
+            s.pop(k, None)
+    for o in old["offers"]:
+        o.pop("price_kind", None)
+    old["analysis_version"] = 3
+    new = reanalyze(old, {}, "ON")
+    assert new["analysis_version"] == ANALYSIS_VERSION
+    assert new["vendors"] and new["coverage"]["found"]["offers"] and new["recommendation"]["lead"]
+    assert new["recommendations"]["lowest"]["supplier"] == res["recommendations"]["lowest"]["supplier"]

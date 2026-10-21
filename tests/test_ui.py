@@ -73,12 +73,27 @@ def test_research_save_reopen_and_tabs(servers, browser):
     page.goto(servers["ready"])
     page.fill("#q", "Acme TX-4400 torque widget")
     page.click("#search-btn")
+    # clarify first: optional questions; answer one, leave the rest blank (skipped)
+    page.wait_for_selector("text=A few questions first")
+    page.fill('input[name="cq-quantity"]', "2")
+    page.click("form.clarify button[type=submit]")
     page.wait_for_url("**/#/c/*", timeout=20000)
     page.wait_for_selector(".rec")
     recs = page.inner_text(".recs")
     assert "Lowest comparable price" in recs and "Best overall value" in recs
     assert "Canadian Tire" in recs and "KMS Tools" in recs
+    assert "Recommended: best-supported option" in page.inner_text(".lead") and "KMS Tools" in page.inner_text(".lead")
+    assert "Options side by side" in page.inner_text("#view") and "Market value" in page.inner_text("#view")
+    assert "Assumed" in page.inner_text(".panel.assumed")
     assert page.locator("table.cmp").first.locator("tr.offer").count() == 3
+    # suppliers tab (default): the local supplier first, with sourced contacts and a quote draft
+    first = page.locator(".vendor").first
+    assert "Northern Tool Supply Ltd" in first.inner_text() and "Thunder Bay" in first.inner_text()
+    assert "(807) 555-0142" in first.inner_text() and "Google Maps listing" in first.inner_text()
+    assert first.locator("a.btn:has-text('Open in email')").get_attribute("href").startswith("mailto:sales@")
+    page.click("text=Coverage")
+    page.wait_for_selector("text=Channels searched")
+    assert "not every supplier" in page.inner_text(".tabpanel")
     # details on demand
     page.locator("table.cmp tr.offer .toggle").first.click()
     assert page.locator("text=Where the price came from").first.is_visible()
@@ -87,6 +102,7 @@ def test_research_save_reopen_and_tabs(servers, browser):
     page.fill('input[name="surtax_pct"]', "25")
     page.click("text=Recalculate")
     page.wait_for_selector("text=Your assumption")
+    assert "Import checklist" in page.inner_text(".tabpanel")
     page.click("text=Price history")
     page.wait_for_selector("text=Not enough comparable history")
     page.click("text=Sources & method")

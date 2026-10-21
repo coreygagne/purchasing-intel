@@ -11,8 +11,10 @@ The app runs only on your computer. Nothing is installed on a server, and nobody
 
 - **The app itself is free.** You only pay Anthropic (the company behind Claude) for the searches and reading
   it does for you.
-- **Each research costs a few cents with the default settings.** The app uses Claude Haiku 5.5, Anthropic's
-  lowest-cost model, and "Quick" searches. After each research, the details show its estimated cost, and the
+- **Each research costs about 10 to 15 cents with only an Anthropic key**, or about 1 cent with a free Tavily
+  key added (see "Optional extra keys"). The app uses Claude Haiku 5.5, Anthropic's lowest-cost model, and
+  "Quick" searches. Expensive or higher-risk items (vehicles, machinery, property, safety gear) are searched
+  more deeply, which costs a little more. After each research, the details show its estimated cost, and the
   page shows your total for the month.
 - **The app stops at US$10 a month by default.** When the estimated total for the month reaches US$10, it
   refuses new research until the 1st. The limit is the `PI_MONTHLY_BUDGET_USD` setting, under "Changing a
@@ -100,9 +102,16 @@ double-click the same file again.
 ## Step 6: Your first research
 
 1. Type what you need, for example `Milwaukee 2767-20` or `nitrile gloves box of 100`.
-2. Leave **Quick** selected (it costs least) and click **Research**. It takes one to three minutes.
-3. Read the top of the results first: the lowest comparable price, the best overall value, and why. Every
-   price links to where it was found.
+2. Leave **Quick** selected (it costs least) and click **Research**.
+3. The app may ask up to four short questions, such as how much you need or whether used is OK. Answer the
+   ones you know and leave the rest blank; it says what it assumed for those. It remembers your answers for
+   that item. Click **Research** again. It takes one to three minutes.
+4. Read the top of the results first: the recommended option and why, the lowest comparable price, the best
+   overall value, and the options side by side. Every price links to where it was found.
+5. Open the **Suppliers & quotes** tab for Thunder Bay suppliers first, with their phone numbers and emails
+   (each shows where it was found). For suppliers that don't publish a price, **Open in email** starts a
+   ready-made quote request in your email program; nothing is sent until you send it.
+6. The **Coverage** tab shows what was searched and what couldn't be reached.
 
 ---
 
@@ -127,11 +136,12 @@ Settings live in a file named **.env** in the app folder. It's created when you 
 
 ## Optional extra keys (both have free plans)
 
-- **Tavily** makes searching cost almost nothing: its free plan gives 1,000 credits a month (about 160
-  standard researches). Sign up at https://app.tavily.com and copy the key; it starts with `tvly-`.
-- **SerpApi** adds Google Shopping (Canada) prices from real stores: its free plan gives 250 searches a
-  month, and each research uses one. Sign up at https://serpapi.com and copy the key from
-  https://serpapi.com/manage-api-key.
+- **Tavily** makes searching cost almost nothing: its free plan gives 1,000 credits a month (about 90 Quick
+  researches; a Quick research uses 8 to 11). Sign up at https://app.tavily.com and copy the key; it starts
+  with `tvly-`.
+- **SerpApi** adds Google Shopping (Canada) prices from real stores and Google Maps listings of Thunder Bay
+  businesses: its free plan gives 250 searches a month, and a Quick research uses two. Sign up at
+  https://serpapi.com and copy the key from https://serpapi.com/manage-api-key.
 
 To add either one: in the app, open **Data sources**, then **Add or change API keys**, paste it in the
 right box and click **Save**. The badge at the top right then lists it, for example
