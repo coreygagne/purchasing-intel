@@ -20,6 +20,8 @@ import httpx
 from . import analysis as an
 from . import discovery as disc
 from . import extract as ex
+from . import market as mk
+from . import vendors as vd
 from .config import Settings
 from .costs import PRICES_CHECKED, estimate_usd
 from .db import Database, iso
@@ -727,11 +729,19 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     apply_match(offers, tokens, by_id, specs, length)
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
-    an.assess_comparability(offers, tokens, quantity, order_length=length)
+    an.assess_comparability(offers, tokens, quantity, order_length=length,
+                            badges_by_source={s.id: s.badges for s in sources if s.badges})
     an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
     rec = an.recommend(offers, tokens, specs=specs, order_length=length)
+    by_offer = {o.id: o for o in offers}
+    for key in ("lowest", "best_value"):
+        if rec.get(key):
+            rec[key]["totals"] = mk.order_totals(by_offer[rec[key]["offer_id"]], quantity, length, home_province)
+    vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
+                               home_city=disc.HOME["city"], quantity=quantity)
+    market = mk.market_value(offers, tokens, length)
     quality = an.quality_evidence(sources, offers, tokens)
     if llm_summary and llm_summary.get("quality"):
         quality["summary"] = llm_summary["quality"]
@@ -765,6 +775,9 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         "source_counts": source_counts,
         "offers": [asdict(o) for o in offers_sorted],
         "recommendations": rec,
+        "market_value": market,
+        "vendors": vendors,
+        "vendor_summary": vd.vendor_summary(vendors),
         "quality": quality,
         "channels": chs,
         "opportunities": an.channel_opportunities(chs, quantity),

@@ -17,11 +17,12 @@ from . import extract as ex
 from .evidence import Offer, Source, canonical_url, is_search_results_url
 from .fx import FxRate
 from .import_costs import delivered_estimate
-from .suppliers import (B2B_MARKETPLACE, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES, DEALS, DISTRIBUTOR, FORUM,
-                        GOVERNMENT, MANUFACTURER, MARKETPLACE, RETAILER, REVIEW, UNKNOWN, VIDEO)
+from .suppliers import (AUCTION, B2B_MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES,
+                        DEALS, DISTRIBUTOR, FORUM, GOVERNMENT, MANUFACTURER, MARKETPLACE, PROPERTY_SITE, RETAILER,
+                        REVIEW, UNKNOWN, VIDEO)
 
 SUPPLIER_TYPE_POINTS = {DISTRIBUTOR: 15, MANUFACTURER: 15, RETAILER: 12, MARKETPLACE: 5, B2B_MARKETPLACE: 3,
-                        CLASSIFIEDS: 0, UNKNOWN: 2}
+                        CLASSIFIEDS: 0, AUCTION: 0, PROPERTY_SITE: 5, UNKNOWN: 2}
 PRICE_LABEL = {"structured_data": "the page's own price data", "shopping_api": "the Google Shopping listing",
                "llm_verified": "verified page text"}
 EVIDENCE_POINTS = {"structured_data": 10, "shopping_api": 8, "llm_verified": 7, "snippet": 2}
@@ -71,7 +72,9 @@ def _offer_dict(o: Offer) -> dict[str, Any]:
 
 
 def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int | None,
-                         order_length: dict[str, Any] | None = None) -> None:
+                         order_length: dict[str, Any] | None = None,
+                         badges_by_source: dict[str, list[str]] | None = None) -> None:
+    badges_by_source = badges_by_source or {}
     for o in offers:
         reasons: list[str] = []
         if o.price_type == "quote_required":
@@ -88,6 +91,10 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
                             "different": "requested model not found in listing"}.get(o.match_level, "not verified as same item"))
         if o.condition and o.condition not in ("new",):
             reasons.append(f"condition: {o.condition}")
+        if o.price_kind == "completed_sale":
+            reasons.append("completed sale (what one sold for) - market evidence, not an offer you can buy at")
+        elif o.price_kind == "current_bid":
+            reasons.append("auction bid in progress - the final price will be higher")
         if o.price is not None and not o.currency:
             reasons.append("currency not stated")
         elif o.price is not None and o.price_cad is None:
@@ -123,8 +130,11 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
                            if o.country else "Seller country unknown.")
         if o.moq and not quantity:
             o.flags.append(f"Minimum order: {o.moq}. Enter your quantity to check it.")
-        if o.supplier_type in (MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS):
+        if o.supplier_type in (MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, AUCTION):
             o.flags.append("Marketplace: the actual seller may be a third party - check seller ratings and return policy.")
+        if badges_by_source.get(o.source_id or ""):
+            o.flags.append(f"Marketplace badge '{badges_by_source[o.source_id][0]}' is the marketplace's own label: "
+                           "it doesn't prove quality, that the item is genuine, or who the seller is.")
         if o.supplier_type == UNKNOWN and not o.supplier_in_directory:
             o.flags.append("Supplier not in the built-in directory - verify the business before ordering.")
         if not tokens and o.comparable:
@@ -587,6 +597,10 @@ CHANNEL_GUIDANCE = {
                      "verification, quality control/inspection, compliance (e.g. CSA/UL), freight, duty/surtax, "
                      "and limited warranty recourse. Treat listed prices as indicative until quoted.",
     CLASSIFIEDS: "Used/clearance channels can cut cost substantially but usually without warranty; inspect before buying.",
+    AUCTION: "Auctions and surplus sales: bids in progress end higher, buyer's premiums and fees are extra, items are "
+             "usually sold as-is, and you arrange pickup or freight. Completed sale prices show market value.",
+    PROPERTY_SITE: "Listings show asking prices; completed sales and an appraisal establish value. Use a local "
+                   "agent or appraiser before an offer.",
 }
 
 
@@ -596,7 +610,7 @@ def channels(offers: list[Offer], sources: list[Source]) -> list[dict[str, Any]]
         by_type[o.supplier_type].append(o)
     out = []
     for t, group in by_type.items():
-        if t in (REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT, DEALS):
+        if t in (REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT, DEALS, BUSINESS_DIRECTORY):
             continue
         priced = [o for o in group if o.price is not None]
         quotes = [o for o in group if o.price_type == "quote_required"]
@@ -616,7 +630,8 @@ def channels(offers: list[Offer], sources: list[Source]) -> list[dict[str, Any]]
             "moq": moqs, "bulk_signals": bulk, "pack_sizes": packs, "price_ranges": ranges,
             "guidance": CHANNEL_GUIDANCE.get(t, "Unclassified seller - verify the business, terms and warranty."),
         })
-    order = [DISTRIBUTOR, MANUFACTURER, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, UNKNOWN]
+    order = [DISTRIBUTOR, MANUFACTURER, RETAILER, MARKETPLACE, B2B_MARKETPLACE, CLASSIFIEDS, AUCTION, PROPERTY_SITE,
+             UNKNOWN]
     out.sort(key=lambda c: order.index(c["type"]) if c["type"] in order else 99)
     return out
 
