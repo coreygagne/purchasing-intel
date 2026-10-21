@@ -568,11 +568,15 @@ def quality_evidence(sources: list[Source], offers: list[Offer], tokens: list[st
                 praise.append({"quote": sent, "source_id": s.id, "url": s.url, "domain": s.domain, "type": s.type,
                                "exact_model": exact})
     gov_recalls = [r for r in recalls if r["type"] == GOVERNMENT]
+    themes = quality_themes(issues + recalls, praise)
     return {
         "ratings": ratings,
         "ratings_note": "Ratings come from different sites with different reviewers and scales; they are listed, "
                         "not averaged." if ratings else "No structured customer ratings were found.",
         "sources_by_type": dict(groups),
+        "themes": themes,
+        "themes_note": "A theme is a pattern when two or more independent sites mention it; one site's mention is "
+                       "isolated (it may still matter, but it isn't evidence of a common problem).",
         "issue_mentions": issues[:12],
         "praise_mentions": praise[:8],
         "recall_mentions": recalls[:6],
@@ -581,6 +585,41 @@ def quality_evidence(sources: list[Source], offers: list[Offer], tokens: list[st
                         if recalls else "No recall mentions found in the search results (this is not a guarantee).") ,
         "summary": None,  # optional AI summary is attached by the LLM layer
     }
+
+
+THEMES = [  # in priority order: each mention is counted under its first matching theme only
+    ("Safety", r"safety|hazard|injur|recall|fire|burn"),
+    ("Overheating", r"overheat|too hot|gets hot|thermal"),
+    ("Leaks", r"\bleak"),
+    ("Breakage or failure", r"\bbroke|broken|fail|died|dies|stopped working|crack|defect"),
+    ("Battery or power", r"battery|charg|power"),
+    ("Build quality", r"poor quality|junk|cheap(?:ly)? made|flimsy|well[- ]built|solid|durable|heavy[- ]duty"),
+    ("Reliability", r"reliab|long[- ]lasting|unreliable"),
+    ("Warranty and support", r"warrant|customer service|support|replac"),
+    ("Value for money", r"value|worth|price"),
+]
+
+
+def quality_themes(issues: list[dict[str, Any]], praise: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group verbatim mentions into themes; a theme is a pattern only when 2+ independent sites mention it."""
+    compiled = [(label, re.compile(p, re.I)) for label, p in THEMES]
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for kind, mentions in (("concern", issues), ("praise", praise)):
+        for m in mentions:
+            label = next((lb for lb, rx in compiled if rx.search(m["quote"])), "Other")
+            grouped[(label, kind)].append(m)
+    out = []
+    for (label, kind), hits in grouped.items():
+        domains = sorted({m["domain"] for m in hits})
+        out.append({"theme": label, "kind": kind, "mentions": len(hits), "sites": len(domains),
+                    "domains": domains, "pattern": len(domains) >= 2,
+                    "label": f"recurring: {len(domains)} independent sites" if len(domains) >= 2 else
+                             "isolated: one site",
+                    "exact_model_mentions": sum(1 for m in hits if m.get("exact_model")),
+                    "quotes": [{"quote": m["quote"], "url": m["url"], "domain": m["domain"],
+                                "exact_model": m.get("exact_model")} for m in hits[:4]]})
+    out.sort(key=lambda t: (not t["pattern"], t["kind"] != "concern", -t["sites"]))
+    return out
 
 
 # ----------------------------------------------------------------- channels

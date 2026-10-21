@@ -19,7 +19,7 @@ from typing import Any
 
 from . import extract as ex
 
-HOME = {"city": "Thunder Bay", "province": "ON", "region": "Northwestern Ontario",
+HOME = {"company": "Midcontinent Terminal", "city": "Thunder Bay", "province": "ON", "region": "Northwestern Ontario",
         "maps_ll": "@48.3809,-89.2477,12z"}
 
 MARKETS = ("local", "regional", "canada", "us", "international")

@@ -209,3 +209,71 @@ def test_order_totals_show_tax_separately():
     per_ft = _offer(2, 8.5, per_length="ft", per_ft_cad=8.5, order_total_cad=2550.0)
     t2 = order_totals(per_ft, None, {"text": "300 ft", "feet": 300.0}, "ON")
     assert t2["pre_tax_total"] == 2550.0 and "shipping" in t2["unknown"] and not t2["complete"]
+
+
+# ------------------------------------------------ recommendation, coverage, RFQs
+
+
+def test_plain_recommendation_picks_and_comparison(tmp_path):
+    res = run(tmp_path, local_web(), quantity=2)
+    r = res["recommendation"]
+    assert r["lead"]["supplier"] == "KMS Tools"  # best-supported option leads
+    assert any("CAD 679.98 before tax for 2 unit(s)" in w for w in r["lead"]["why"])
+    labels = {lab: row for row in r["comparison"] for lab in row["labels"]}
+    assert labels["Lowest comparable cost"]["supplier"] == "Canadian Tire"
+    assert labels["Best used or auction option"]["supplier"] == "Princess Auto"  # refurbished, shown separately
+    intl = labels["Best option from outside Canada"]
+    assert intl["supplier"] == "Amazon.com" and not intl["total_complete"] and "duty" in intl["total_unknown"]
+    assert "local" not in r["picks"]  # the local supplier showed no price: no pick, a quote request instead
+    assert any(m["kind"] == "local" and "Northern Tool Supply Ltd" in m["text"] for m in r["missing_picks"])
+    assert r["distinction"]
+
+
+def test_coverage_report_counts_without_claiming_completeness(tmp_path):
+    res = run(tmp_path, local_web())
+    cov = res["coverage"]
+    assert cov["found"]["map_listings"] == 1 and cov["found"]["local_vendors"] >= 1
+    assert cov["found"]["verified_prices"] >= 2 and cov["found"]["quote_required_vendors"] == 2
+    chans = {c["channel"]: c for c in cov["channels"]}
+    assert chans["wholesale"]["searches"] >= 1 and chans["manufacturer"]["searches"] >= 1
+    assert chans["local_map"]["searches"] >= 1
+    assert any(m["market"] == "local" for m in cov["markets"])
+    assert any(x["domain"] == "grainger.ca" for x in cov["inaccessible"])
+    assert "not every supplier" in cov["disclaimer"] and "%" not in cov["disclaimer"]
+    assert cov["next_steps"] and cov["stop_reason"]
+
+
+def test_rfq_drafts_are_drafts_with_sourced_contacts(tmp_path):
+    res = run(tmp_path, local_web(), quantity=2)
+    d = next(x for x in res["rfq_drafts"] if x["vendor"] == "Northern Tool Supply Ltd")
+    assert d["to"] == "sales@northerntoolsupply-example.ca" and d["to_basis"] == "the supplier's own website"
+    assert d["how"] == "email" and d["mailto"].startswith("mailto:sales@northerntoolsupply-example.ca?subject=")
+    assert "Midcontinent Terminal in Thunder Bay" in d["body"] and "Quantity: 2 unit(s)" in d["body"]
+    assert "[Your name]" in d["body"]  # no personal details invented
+    tenaquip = next(x for x in res["rfq_drafts"] if x["vendor"] == "Tenaquip")
+    assert tenaquip["to"] is None and tenaquip["how"] == "website contact form"
+    assert not any(x["vendor"].startswith("Amazon") for x in res["rfq_drafts"])  # marketplaces aren't asked
+
+
+def test_quality_themes_separate_patterns_from_isolated_mentions():
+    from app.analysis import quality_themes
+    issues = [{"quote": "The clutch overheats under load", "domain": "a.example", "url": "u1", "exact_model": True},
+              {"quote": "Mine overheated after an hour", "domain": "b.example", "url": "u2", "exact_model": False},
+              {"quote": "It broke in a week", "domain": "a.example", "url": "u3", "exact_model": True}]
+    themes = {t["theme"]: t for t in quality_themes(issues, [])}
+    assert themes["Overheating"]["pattern"] and themes["Overheating"]["sites"] == 2
+    assert themes["Overheating"]["exact_model_mentions"] == 1
+    assert not themes["Breakage or failure"]["pattern"]
+    assert themes["Breakage or failure"]["label"] == "isolated: one site"
+
+
+def test_import_checklist_leaves_unknowns_unknown(tmp_path):
+    res = run(tmp_path, local_web())
+    ck = res["import_checklist"]
+    assert ck["applies"] and ck["foreign_offers"] >= 1
+    items = {i["topic"]: i for i in ck["items"]}
+    assert items["Tariff classification (HS code)"]["status"] == "unknown"
+    assert items["Country of origin"]["status"] == "unknown"
+    assert "USD at 1.38" in items["Currency"]["text"]
+    assert items["Electrical safety mark"]["status"] == "check"  # tools category compliance
+    assert res["compliance"][0]["topic"] == "Electrical safety mark"

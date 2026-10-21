@@ -266,7 +266,9 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
         address.pop("_strength", None)
     return {
         "id": "", "name": v.name, "domain": v.domain, "website": v.website, "type": v.type, "country": v.country,
-        "tier": v.tier, "tier_label": TIER_LABELS.get(v.tier, TIER_LABELS[None]), "tier_basis": v.tier_basis,
+        "tier": v.tier, "tier_basis": v.tier_basis,
+        "tier_label": ("Canada (location not stated)" if v.tier == "canada" and v.tier_strength == 0
+                       else TIER_LABELS.get(v.tier, TIER_LABELS[None])),
         "channels": sorted(v.channels), "markets": sorted(v.markets),
         "address": address, "phones": v.phones, "emails": v.emails,
         "has_contact": bool(v.phones or v.emails),

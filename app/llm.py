@@ -379,9 +379,16 @@ class ClaudeAnalyst:
                     points_rejected += 1
                     continue
                 points_kept += 1
+                # a point is a pattern only when quotes verify in sources on two or more different sites
+                backed = [i for i in ids if any(quote_in_source(q, by_id[i]) for q in quotes)]
+                domains = sorted({by_id[i].domain for i in backed})
                 out.append({"point": p["point"].strip(), "source_ids": ids, "quotes": quotes,
                             "urls": [by_id[i].url for i in ids],
-                            "source_types": sorted({by_id[i].type for i in ids})})
+                            "source_types": sorted({by_id[i].type for i in ids}),
+                            "support": {"sources": len(backed), "sites": len(domains), "domains": domains,
+                                        "pattern": len(domains) >= 2,
+                                        "label": (f"recurring: {len(domains)} independent sites" if len(domains) >= 2
+                                                  else "isolated: one site")}})
             verified_quality[kind] = out
         note = (quality.get("overall_note") or "").strip()
         # A free-text note may not introduce figures (ratings, counts, percentages) of its own

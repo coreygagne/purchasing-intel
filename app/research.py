@@ -22,13 +22,16 @@ from . import discovery as disc
 from . import extract as ex
 from . import market as mk
 from . import vendors as vd
+from .coverage import coverage_report
+from .picks import recommend_plainly
+from .rfq import rfq_drafts
 from .config import Settings
 from .costs import PRICES_CHECKED, estimate_usd
 from .db import Database, iso
 from .evidence import Offer, OfferBuilder, Source, apply_match, build_sources, is_seller_source, add_source
 from .fetch import FetchResult, PageFetcher
 from .fx import FxRate, FxService
-from .import_costs import clean_assumptions, general_notes, LINKS
+from .import_costs import COMPLIANCE, LINKS, clean_assumptions, general_notes, import_checklist
 from .discovery import PlannedQuery
 from .providers import LocalBusiness, ProviderError, ProviderSet, ShoppingListing, build_providers
 from .providers.anthropic_fetch import VIA, AnthropicFetcher, AnthropicPageReader
@@ -742,6 +745,15 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
                                home_city=disc.HOME["city"], quantity=quantity)
     market = mk.market_value(offers, tokens, length)
+    category = (meta.get("plan") or {}).get("category") or disc.categorize(identity.get("name", ""),
+                                                                           identity.get("category")).key
+    fx_public = {cur: asdict(r) for cur, r in fx.items() if cur != "CAD"}
+    checklist = import_checklist([asdict(o) for o in offers], fx_public, clean, category)
+    compliance = COMPLIANCE.get(category, COMPLIANCE["general"])
+    used_ok = (meta.get("plan") or {}).get("used_ok", True)
+    plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok)
+    rfqs = rfq_drafts(vendors, identity, quantity, length, meta.get("answers"), compliance, category)
+    cov = coverage_report(meta, sources, offers, vendors, market)
     quality = an.quality_evidence(sources, offers, tokens)
     if llm_summary and llm_summary.get("quality"):
         quality["summary"] = llm_summary["quality"]
@@ -775,7 +787,10 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         "source_counts": source_counts,
         "offers": [asdict(o) for o in offers_sorted],
         "recommendations": rec,
+        "recommendation": plainly,
         "market_value": market,
+        "rfq_drafts": rfqs,
+        "coverage": cov,
         "vendors": vendors,
         "vendor_summary": vd.vendor_summary(vendors),
         "quality": quality,
@@ -784,8 +799,10 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         "alternatives": alternatives,
         "spec_differences": an.spec_differences(offers),
         "alternatives_ai": alternatives_ai,
-        "fx": {cur: asdict(r) for cur, r in fx.items() if cur != "CAD"},
+        "fx": fx_public,
         "import_notes": general_notes(home_province),
+        "import_checklist": checklist,
+        "compliance": compliance,
         "import_links": LINKS,
         "conflicts": conflicts,
         "gaps": gaps,

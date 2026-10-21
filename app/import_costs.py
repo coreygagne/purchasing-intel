@@ -11,6 +11,7 @@ Rules of the road:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 GUIDANCE_REVIEWED = "2026-10-20"
@@ -182,3 +183,126 @@ def delivered_estimate(offer: dict[str, Any], assumptions: dict[str, float | Non
         "notes": notes,
         "kind": "delivered" if domestic else "landed",
     }
+
+
+# ------------------------------------------------------------------ import checklist
+# Canadian requirements by category. Rules of thumb for what to ask about, not legal advice; reviewed on the
+# date below. Each names the standard or program so it can be checked with the regulator or supplier.
+COMPLIANCE_REVIEWED = "2026-10-21"
+COMPLIANCE: dict[str, list[dict[str, str]]] = {
+    "electrical": [
+        {"topic": "Electrical certification",
+         "text": "Electrical products used in Ontario must carry an accepted certification mark (for example CSA, "
+                 "cUL or cETL). Ontario's Electrical Safety Authority enforces this, and uncertified equipment can "
+                 "fail inspection. Ask for the certification and confirm the mark is for Canada (c-mark), not US "
+                 "only.", "link": "https://esasafe.com"},
+        {"topic": "Cable ratings",
+         "text": "For cable, confirm the CSA standard and rating on the jacket (for example TECK90 to CSA C22.2 "
+                 "No. 131, voltage and temperature rating, FT4 flame rating) matches the installation design."},
+    ],
+    "ppe": [
+        {"topic": "CSA / NIOSH standards",
+         "text": "Ontario workplaces generally require PPE certified to Canadian standards: protective footwear "
+                 "CSA Z195, industrial headwear CSA Z94.1, high-visibility apparel CSA Z96, and NIOSH-approved "
+                 "respirators used under a CSA Z94.4 program. Check the marking on the item, not only the listing."},
+    ],
+    "vehicle": [
+        {"topic": "Transport Canada import (RIV)",
+         "text": "A vehicle bought in the US must be admissible to Canada and go through the Registrar of Imported "
+                 "Vehicles (RIV): open recalls must be cleared and inspection completed before Ontario "
+                 "registration and safety certificate.", "link": "https://www.riv.ca"},
+    ],
+    "machinery": [
+        {"topic": "Workplace requirements",
+         "text": "Equipment for an Ontario workplace may need a pre-start health and safety review (Regulation "
+                 "851, section 7), CSA/cUL approval of electrical parts, and inspection or certification for "
+                 "lifting devices. Ask the seller for manuals, inspection records and certification."},
+    ],
+    "consumables": [
+        {"topic": "WHMIS for chemicals",
+         "text": "Hazardous products need WHMIS 2015 labels and Safety Data Sheets in English and French "
+                 "(Hazardous Products Regulations). Imported product labelled for another market may not comply."},
+    ],
+    "electronics": [
+        {"topic": "ISED radio certification",
+         "text": "Devices with radios (Wi-Fi, Bluetooth, two-way radios) need ISED Canada certification (an IC "
+                 "number on the label); mains-powered items need an accepted electrical safety mark."},
+    ],
+    "tools": [
+        {"topic": "Electrical safety mark",
+         "text": "Corded or charger-powered tools need an accepted Canadian electrical safety mark (CSA, cUL, "
+                 "cETL). Check warranty coverage: some brands only honour warranty for units sold in Canada."},
+    ],
+    "parts": [
+        {"topic": "Pressure parts (CRN)",
+         "text": "Fittings and components for boilers, pressure vessels or piping may need a Canadian Registration "
+                 "Number (CRN) registered in Ontario (TSSA). Ask the supplier for the CRN where it applies."},
+    ],
+    "general": [
+        {"topic": "Product safety and labelling",
+         "text": "Consumer products sold in Canada must meet the Canada Consumer Product Safety Act; check for "
+                 "bilingual labelling and any product-specific regulations."},
+    ],
+    "property": [
+        {"topic": "Due diligence",
+         "text": "Before an offer: zoning and permitted use (City of Thunder Bay), MPAC property assessment, "
+                 "title search, building condition inspection and, for industrial land, a Phase I environmental "
+                 "site assessment."},
+    ],
+}
+
+
+def import_checklist(offers: list[dict[str, Any]], fx: dict[str, Any], assumptions: dict[str, float | None],
+                     category: str | None) -> dict[str, Any]:
+    """What is known and unknown about importing this item (currency, origin, tariff, freight, insurance,
+    brokerage, taxes, compliance, delivery). `offers` are offer dicts; only priced non-Canadian ones count."""
+    foreign = [o for o in offers if o.get("price") is not None and o.get("country") != "CA"]
+    currencies = sorted({o["currency"] for o in foreign if o.get("currency") and o["currency"] != "CAD"})
+    origin = [f"{o['supplier']}: {v}" for o in foreign for k, v in (o.get("specs") or {}).items()
+              if re.search(r"origin|made in|country of manufacture", k, re.I)]
+    items = []
+
+    def add(topic: str, status: str, text: str, link: str | None = None) -> None:
+        items.append({"topic": topic, "status": status, "text": text, **({"link": link} if link else {})})
+
+    if currencies:
+        rates = "; ".join(f"{c} at {fx[c]['rate_to_cad']} (Bank of Canada, {fx[c].get('rate_date') or 'date n/a'})"
+                          for c in currencies if c in fx)
+        add("Currency", "known" if rates else "unknown",
+            f"Foreign-currency prices: {', '.join(currencies)}. " + (f"Converted {rates}. " if rates else "") +
+            "Card or wire payments add the bank's own exchange margin.")
+    else:
+        add("Currency", "known", "All priced non-Canadian listings are in CAD, or there are none.")
+    add("Country of origin", "known" if origin else "unknown",
+        ("Listings state: " + "; ".join(origin[:3]) + ". Confirm with the supplier - origin decides duty."
+         if origin else "Not established by the listings. Ask the supplier where the item is made: duty, CUSMA "
+         "duty-free treatment and surtaxes depend on origin, not on where the seller is."))
+    add("Tariff classification (HS code)", "unknown",
+        "Not determined here - classification is uncertain until a customs broker confirms it (or CBSA gives an "
+        "advance ruling). Duty and surtax rates depend on it.", LINKS["customs_tariff"])
+    duty = assumptions.get("duty_pct")
+    add("Duty and surtax", "assumption" if duty is not None else "unknown",
+        f"Using your assumption of {duty:g}% duty." if duty is not None else
+        "Unknown until the HS code and origin are known. US-origin goods may carry Canadian surtaxes (see notes).",
+        LINKS["us_surtax_order_2026"])
+    ship = assumptions.get("intl_shipping_cad")
+    add("Freight and insurance", "assumption" if ship is not None else "unknown",
+        (f"Using your freight assumption of CAD {ship:,.2f}. " if ship is not None else "Not stated for Canada. ") +
+        "Ask for a delivered (DDP) quote to Thunder Bay, or confirm the Incoterm (EXW, FOB, CIF, DDP) to see who pays "
+        "freight, insurance and duties.")
+    brk = assumptions.get("brokerage_cad")
+    add("Brokerage", "assumption" if brk is not None else "unknown",
+        f"Using your assumption of CAD {brk:,.2f}." if brk is not None else
+        "Courier or broker clearance fees vary by carrier and value; ask for them up front.", LINKS["import_guide"])
+    add("Taxes", "rule", "5% GST is assessed at the border on value plus duties; GST/HST registrants generally "
+        "recover it.", LINKS["hst_imports_memo"])
+    for c in COMPLIANCE.get(category or "general", COMPLIANCE["general"]):
+        add(c["topic"], "check", c["text"], c.get("link"))
+    add("Delivery to Thunder Bay", "unknown", "Transit time and whether the supplier delivers to Thunder Bay (or "
+        "only to a depot) aren't stated - ask before ordering.")
+    add("Warranty and returns", "check", "Cross-border warranty claims and returns can be slow or refused; confirm "
+        "the warranty is honoured in Canada.")
+    return {"applies": bool(foreign), "foreign_offers": len(foreign), "items": items,
+            "reviewed": COMPLIANCE_REVIEWED,
+            "note": "A checklist of what to confirm, not legal or customs advice. Unknown items are left unknown, "
+                    "never assumed."}
