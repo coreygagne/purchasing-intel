@@ -1,7 +1,7 @@
 # Getting started (no coding needed)
 
 These steps put Purchasing Research on your own computer. You do them once, in about 15 minutes. After that,
-you start the app by double-clicking one file.
+you start the app by double-clicking one file. Mac and Windows are both covered.
 
 The app runs only on your computer. Nothing is installed on a server, and nobody else can open it.
 
@@ -29,7 +29,7 @@ The app runs only on your computer. Nothing is installed on a server, and nobody
    credit; US$5–10 is plenty to start.
 3. **Set a spend limit:** in **Settings**, find **Limits** and set a monthly spend limit, for example US$10.
 4. **Create the key:** open **API Keys**, choose **Create Key**, and name it "Purchasing research".
-5. Copy the key. It starts with `sk-ant-` and is shown only once. Keep the page open until step 4 below.
+5. Copy the key. It starts with `sk-ant-` and is shown only once. Keep the page open until step 5 below.
 
 Treat the key like a password. Don't email it or paste it into a chat. If a key was ever shared, delete it on
 the API Keys page and create a new one.
@@ -38,32 +38,66 @@ the API Keys page and create a new one.
 
 1. Go to https://github.com/coreygagne/purchasing-intel and sign in to GitHub (it's a private project).
 2. Click the green **Code** button, then **Download ZIP**.
-3. Open your Downloads folder, right-click **purchasing-intel-main.zip** and choose **Extract All…**.
-   Put it somewhere easy to find, such as your Documents folder.
+3. Find the download in your **Downloads** folder.
+   - **Mac:** Safari usually unzips it for you into a folder named **purchasing-intel-main**. If you see a
+     `.zip` file instead, double-click it.
+   - **Windows:** right-click **purchasing-intel-main.zip** and choose **Extract All…**.
+4. Move the **purchasing-intel-main** folder somewhere easy to find, such as **Documents**.
 
-## Step 3: Start the app (5 minutes the first time)
+## Step 3: Install Python (Mac, first time only, 3 minutes)
 
-1. Open the extracted **purchasing-intel-main** folder and double-click **run.bat**.
-2. If Windows shows **"Windows protected your PC"**, click **More info**, then **Run anyway**. Windows shows
-   this for any downloaded program it doesn't recognize.
+The app is written in Python, a free programming language that has to be installed once. Macs include an old
+version that's too old for the app.
+
+1. Go to https://www.python.org/downloads/macos/ and click the yellow **Download Python** button.
+2. Open the downloaded file (it ends in `.pkg`) and click **Continue**, **Agree** and **Install**. Enter your
+   Mac password when asked, then click **Close**.
+
+If you skip this, the app's starter notices and opens that page for you. On **Windows**, skip this step:
+`run.bat` installs Python itself.
+
+## Step 4: Start the app (a few minutes the first time)
+
+### On a Mac
+
+1. Open the **purchasing-intel-main** folder and double-click **Start Purchasing Research**.
+2. The first time, macOS may say it **"Not Opened"** or **"Apple could not verify…"**. macOS shows this for any
+   downloaded file that isn't from the App Store. To allow it:
+   - Click **Done**.
+   - Open the **Apple menu**, then **System Settings**, then **Privacy & Security**.
+   - Scroll down to the message about "Start Purchasing Research" and click **Open Anyway**.
+   - Confirm with your password or Touch ID.
+   - On older macOS versions instead: hold **Control**, click the file, choose **Open**, then **Open** again.
+3. A **Terminal** window opens. The first start takes a minute or two while it sets itself up.
+4. Your web browser opens the app at **http://127.0.0.1:8000**. If it doesn't open by itself, type that
+   address into Safari or Chrome.
+
+**If double-clicking doesn't work at all:**
+1. Press **Command-Space**, type `Terminal` and press **Return**.
+2. Type `bash` followed by a space. Don't press Return yet.
+3. Drag the **Start Purchasing Research** file from Finder into the Terminal window, then press **Return**.
+
+### On Windows
+
+1. Open the **purchasing-intel-main** folder and double-click **run.bat**.
+2. If Windows shows **"Windows protected your PC"**, click **More info**, then **Run anyway**.
 3. A black window opens.
    - **If it says Python is needed,** it installs it for you; choose **Yes** if Windows asks for permission.
      When it finishes, close the black window and double-click **run.bat** again.
    - **The first start then takes a minute or two** while it sets itself up.
-4. Your web browser opens the app at **http://127.0.0.1:8000**. If it doesn't open by itself, type that
-   address into your browser.
+4. Your browser opens the app at **http://127.0.0.1:8000**.
 
-**Keep the black window open while you use the app.** Closing it stops the app. Next time, just double-click
-**run.bat** again.
+**Keep the Terminal or black window open while you use the app.** Closing it stops the app. Next time, just
+double-click the same file again.
 
-## Step 4: Paste your key (1 minute)
+## Step 5: Paste your key (1 minute)
 
 1. The app shows **"Connect a search provider to start"** with a box labelled **Anthropic API key**.
 2. Paste the key from step 1 and click **Save**.
 3. The app checks the key with Anthropic and saves it on your computer. The badge at the top right turns green:
    **Ready: Anthropic web search + AI reading**.
 
-## Step 5: Your first research
+## Step 6: Your first research
 
 1. Type what you need, for example `Milwaukee 2767-20` or `nitrile gloves box of 100`.
 2. Leave **Quick** selected (it costs least) and click **Research**. It takes one to three minutes.
@@ -76,9 +110,12 @@ the API Keys page and create a new one.
 
 Settings live in a file named **.env** in the app folder. It's created when you save your key.
 
-1. Close the black window to stop the app.
-2. In the app folder, right-click **.env**, choose **Open with**, then **Notepad**.
-3. Change the line you need, save, and double-click **run.bat** again.
+1. Close the Terminal or black window to stop the app.
+2. Open the settings file:
+   - **Mac:** in Finder, open the app folder and press **Command-Shift-.** (period) to show hidden files.
+     Then right-click **.env** and choose **Open With**, then **TextEdit**.
+   - **Windows:** right-click **.env**, choose **Open with**, then **Notepad**.
+3. Change the line you need, save, and start the app again.
 
 | To… | Change this line |
 |---|---|
@@ -98,13 +135,16 @@ very little.
 
 ## If something goes wrong
 
-- **The black window closes straight away:** open the folder, click the address bar, type `cmd` and press
-  Enter. In the window that opens, type `run.bat` and press Enter. You'll see the message that explains
-  the problem.
+- **Mac: "could not be executed because you do not have appropriate access privileges":** use the Terminal
+  method under "If double-clicking doesn't work at all" in step 4.
+- **"Address already in use":** the app is already running in another window. Use that window's app, or close
+  that window first.
+- **Windows: the black window closes straight away:**
+  1. Open the folder, click the address bar, type `cmd` and press Enter.
+  2. In the window that opens, type `run.bat` and press Enter. You'll see the message that explains the
+     problem.
 - **"Anthropic rejected this key":** copy the key again from the Console, or create a new one.
 - **"Monthly spending limit reached":** the app's monthly limit is used up. Wait for the 1st, or raise
   `PI_MONTHLY_BUDGET_USD` (see "Changing a setting").
 - **Results look thin:** try **Standard** depth. If that's still thin, switch to the Sonnet model (see
   "Changing a setting").
-- **On a Mac:** the steps are the same, except you open Terminal in the app folder and run `./run.sh`
-  instead of double-clicking run.bat.

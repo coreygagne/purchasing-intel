@@ -3,7 +3,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 if [ ! -d .venv ]; then
-  python3 -m venv .venv
+  # Python 3.11+ (on a Mac, Apple's /usr/bin/python3 is 3.9, so look for newer installs first)
+  PY=""
+  for c in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+      PY="$c"; break
+    fi
+  done
+  [ -n "$PY" ] || { echo "Python 3.11 or newer is needed: https://www.python.org/downloads/" >&2; exit 1; }
+  "$PY" -m venv .venv
 fi
 # shellcheck disable=SC1091
 . .venv/bin/activate

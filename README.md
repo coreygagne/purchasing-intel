@@ -28,9 +28,11 @@ mode and no offline fallback.
 
 Requirements: Python 3.11+ and internet access to the hosts listed under [Network](#network-access).
 
+- **Mac:** double-click `Start Purchasing Research.command`. It needs Python 3.11+ from python.org, and opens
+  the download page if it's missing. It sets up `.venv` on the first run, starts the app and opens the browser.
 - **Windows:** double-click `run.bat`. It installs Python with winget if it's missing, sets up `.venv` on the
   first run, starts the app and opens the browser.
-- **Linux/macOS:** run `./run.sh` (on a Mac it also opens the browser).
+- **Linux (or a Mac terminal):** run `./run.sh`.
 
 The app runs at http://127.0.0.1:8000. With no key configured, it shows a setup screen where you paste an
 Anthropic key (and optionally a Tavily key). The key is checked with Anthropic using a free model-list call,
