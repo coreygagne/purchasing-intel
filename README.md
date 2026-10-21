@@ -234,7 +234,7 @@ Recommendations are always based on observed prices, never on speculative import
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q            # 173 tests; 6 live-network tests are skipped unless enabled (below)
+python -m pytest -q            # 178 tests; 6 live-network tests are skipped unless enabled (below)
 ```
 
 **Live provider check** (real credits: about 5 Tavily credits and 3 SerpApi searches). It confirms that
@@ -398,11 +398,21 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
   - Comparisons saved by an older version are re-analysed under the current rules when opened. This uses
     the stored evidence, so it's free and runs no searches. Per-length units need the page text, so they
     apply to new searches only.
+- **Second live run after the update (same request; Tavily + SerpApi Google Shopping + Haiku 5.5):**
+  - Verified live: the update path (keys and saved research copied automatically), SerpApi's Google
+    Shopping search, and the spec checks ("The listing states: 500 kcmil, 3-conductor").
+  - The CAD 8.42 listing was no longer recommended.
+  - New problem: none of the 8 comparable listings said whether its price was per foot, per metre or per
+    reel. The app compared them as plain prices and recommended CAD 321.32 (57% below a CAD 747.93
+    median).
+  - Fixed since: when a request names a length to buy, a price that doesn't state what length it covers
+    isn't compared. If no listing states one, there's no recommendation and the app says to check the
+    listings or ask for a quote. A reel or spool size in the title ("250 ft reel") is read as the length
+    the price covers.
 - **Haiku 5.5 reading:** this run is its first live use. Its results looked usable, but one search isn't
   enough to judge the model.
 
 **Not verified live:**
-- **SerpApi with a real key** (added by the user on 2026-10-21; not yet run).
 - **Tavily and SerpApi from the build sandbox.** That sandbox's network policy refuses `api.tavily.com` and `serpapi.com` (proxy
   403), and no keys for them were available. Their documentation sites couldn't be opened from there, but
   search excerpts of the current docs (checked 2026-10-20) confirm two things:

@@ -71,8 +71,10 @@ def test_cable_request_compares_per_foot_and_recommends_a_listing_that_states_th
     lumen = by_host(res, "lumen.ca")
     assert not lumen["comparable"] and any("unit unclear" in r for r in lumen["exclusion_reasons"])
     assert any("aluminum" in r for r in lumen["exclusion_reasons"])
+    # a "250 ft reel" sold as one item: its price covers 250 ft
     reel = by_host(res, "reel-example")
-    assert not reel["comparable"] and any("priced per item" in r for r in reel["exclusion_reasons"])
+    assert (reel["per_length"], reel["per_length_qty"], reel["per_ft_cad"], reel["comparable"]) == ("ft", 250, 78.0, True)
+    assert reel["order_total_cad"] == 23400.0
     one_c = by_host(res, "nassaunationalcable")
     assert any("1-conductor" in r for r in one_c["exclusion_reasons"])
 
@@ -176,3 +178,41 @@ def test_comparisons_saved_by_an_older_version_are_reanalysed_when_opened(tmp_pa
     assert res["analysis_version"] >= 2 and len(fw.calls) == calls_before  # nothing searched or fetched
     assert res["recommendations"]["lowest"]["offer_id"] != solex_id
     assert db.get_comparison(cid)["result"]["analysis_version"] >= 2   # saved, so it's done once
+
+
+def test_length_request_with_no_unit_on_any_listing_recommends_nothing(tmp_path):
+    """Second live run (2026-10-21): 8 listings, none saying per foot / metre / reel, were compared as plain
+    prices (CAD 321.32 vs a CAD 747.93 median). Without a unit the prices can't be compared for 300 ft."""
+    results = {"price": [
+        tavily_result("https://central.electrozad-example.ca/teck-500", "Teck90 500 kcmil 3C copper",
+                      "500 kcmil 3-conductor copper Teck90 Price: $321.32"),
+        tavily_result("https://www.supplier-a-example.ca/teck-500", "500 MCM 3C copper Teck cable",
+                      "500 MCM 3C copper Teck90 Our price $747.93"),
+        tavily_result("https://www.supplier-b-example.ca/teck-500", "500 MCM 3-conductor copper Teck",
+                      "500 MCM 3-conductor copper Teck $902.10"),
+    ], "reviews": [], "wholesale": [], "other": []}
+    app = create_app(Settings(tavily_api_key="tvly-test-key", database_path=tmp_path / "n.db"),
+                     transport=FakeWeb(tavily_results=results).transport())
+    with TestClient(app) as c:
+        job = research(c, QUERY, depth="quick")
+        res = c.get(f"/api/comparisons/{job['comparison_id']}").json()["result"]
+    rec = res["recommendations"]
+    assert rec["lowest"] is None and rec["best_value"] is None
+    assert any("3 x price doesn't say whether it's per foot, per metre or per reel" in n for n in rec["notes"])
+    assert any("ask suppliers for a quote for 300 ft" in n for n in rec["notes"])
+    # without a length in the request, the same listings are compared as listing prices
+    plain = Settings(tavily_api_key="tvly-test-key", database_path=tmp_path / "p.db")
+    app = create_app(plain, transport=FakeWeb(tavily_results=copy.deepcopy(results)).transport())
+    with TestClient(app) as c:
+        job = research(c, "3-conductor 500 MCM copper Teck cable", depth="quick")
+        res = c.get(f"/api/comparisons/{job['comparison_id']}").json()["result"]
+    assert res["recommendations"]["lowest"] is not None
+
+
+@pytest.mark.parametrize("title,qty,unit", [
+    ("500 MCM 3C Copper Teck - 250 ft reel", 250, "ft"), ("Spool of 500 m 12 AWG wire", 500, "m"),
+    ("12/3 outdoor extension cord 50 ft", None, None), ("1,000 ft drum THHN #10", 1000, "ft"),
+])
+def test_packaged_length_in_title(title, qty, unit):
+    got = ex.packaged_length(title)
+    assert (got.qty if got else None, got.unit if got else None) == (qty, unit)

@@ -817,6 +817,24 @@ def sold_by_length(text: str) -> LengthUnit | None:
     return LengthUnit(_unit_kind(m.group("unit") or m.group("unit2")), 1.0, m.group(0).strip())
 
 
+_PACKAGED_LENGTH = re.compile(
+    r"(?<![\w/.-])(?P<n>\d[\d,]*(?:\.\d+)?)\s*-?\s*(?P<u>ft\b\.?|feet\b|foot\b|'|m\b|metres?\b|meters?\b)\s*-?\s*"
+    r"(?:reel|spool|coil|roll|drum|box|cut|length)s?\b|"
+    r"\b(?:reel|spool|coil|roll|drum|box|cut)s?\s+of\s+(?P<n2>\d[\d,]*(?:\.\d+)?)\s*(?P<u2>ft\b|feet\b|foot\b|'|m\b|metres?\b|"
+    r"meters?\b)", re.I)
+
+
+def packaged_length(title: str) -> LengthUnit | None:
+    """Length of a reel, spool or cut sold as one item ("250 ft reel", "spool of 500 m")."""
+    m = _PACKAGED_LENGTH.search(title or "")
+    if not m:
+        return None
+    n = float((m.group("n") or m.group("n2")).replace(",", ""))
+    if n <= 0:
+        return None
+    return LengthUnit(_unit_kind(m.group("u") or m.group("u2")), n, m.group(0).strip())
+
+
 def amount_length_unit(text: str, amount: float) -> LengthUnit | None:
     """Unit written after `amount` where it appears in page text ("$8.42 / ft")."""
     for shown in {f"{amount:,.2f}", f"{amount:.2f}", f"{amount:g}"}:

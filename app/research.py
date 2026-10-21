@@ -74,7 +74,8 @@ AI_PLAN_TIMEOUT_S = 60
 AI_EXTRACT_TIMEOUT_S = 150
 # Bump when analysis rules change; saved comparisons from older versions are re-analysed (free, no searching)
 # when opened. 2: per-length prices, requested-spec checks, implausibly low prices set aside.
-ANALYSIS_VERSION = 2
+# 3: with a length to buy, prices must say what length they cover; reel sizes read from titles.
+ANALYSIS_VERSION = 3
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -526,10 +527,10 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         specs, length = identity.get("specs") or [], identity.get("order_length") or None
     else:  # saved before spec checks existed
         specs, length = ex.request_specs(identity.get("name", ""))
-    apply_match(offers, tokens, by_id, specs)
+    apply_match(offers, tokens, by_id, specs, length)
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
-    an.assess_comparability(offers, tokens, quantity)
+    an.assess_comparability(offers, tokens, quantity, order_length=length)
     an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)

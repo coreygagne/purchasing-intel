@@ -70,7 +70,8 @@ def _offer_dict(o: Offer) -> dict[str, Any]:
 # ----------------------------------------------------------- comparability
 
 
-def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int | None) -> None:
+def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int | None,
+                         order_length: dict[str, Any] | None = None) -> None:
     for o in offers:
         reasons: list[str] = []
         if o.price_type == "quote_required":
@@ -93,6 +94,9 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append(f"no exchange rate available for {o.currency}")
         if o.superseded():
             reasons.append("superseded by a more reliable price for the same listing")
+        if order_length and o.price is not None and not o.per_length:
+            reasons.append(f"price doesn't say whether it's per foot, per metre or per reel - it can't be compared "
+                           f"for {order_length['text']}")
         if o.per_length == "?":
             reasons.append(f"price unit unclear ('{o.per_length_text}': per metre, or per 1,000 ft in the wire trade)")
         for c in o.spec_conflicts:
@@ -315,6 +319,9 @@ def recommend(offers: list[Offer], tokens: list[str], specs: list[dict[str, Any]
                     counts[r] += 1
             reasons.append("No listing met the comparison rules: " +
                            "; ".join(f"{n} x {r}" for r, n in sorted(counts.items(), key=lambda kv: -kv[1])[:5]) + ".")
+            if order_length and any(r.startswith("price doesn't say whether") for r in counts):
+                reasons.append(f"For {order_length['text']}, open the listings to see what each price covers, or ask "
+                               f"suppliers for a quote for {order_length['text']}.")
         return {"lowest": None, "best_value": None, "basis": None, "notes": reasons, "pool_size": 0}
 
     basis, _, unknown_pack = _comparison_basis(pool)

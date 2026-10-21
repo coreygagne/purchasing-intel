@@ -473,9 +473,14 @@ def is_search_results_url(url: str) -> bool:
 
 
 def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source],
-                specs: list[dict[str, Any]] | None = None) -> None:
+                specs: list[dict[str, Any]] | None = None, order_length: dict[str, Any] | None = None) -> None:
     for o in offers:
         o.spec_confirmed, o.spec_missing, o.spec_conflicts = [], [], []
+        if order_length and not o.per_length and o.price is not None:
+            reel = ex.packaged_length(o.product_title)
+            if reel:  # "250 ft reel" sold as one item: the price covers that length
+                o.per_length, o.per_length_qty = reel.unit, reel.qty
+                o.per_length_text = f"title says '{reel.text}'"
         if specs and not tokens:
             # only the listing's own words count: its title, page data and quoted text
             listing = " ".join([o.product_title, *o.specs.values(), *o.identifiers.values(),
