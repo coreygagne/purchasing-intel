@@ -362,6 +362,15 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
 
   `tests/test_live_providers.py` is the one-command live check once a key and network access are available
   (see Tests).
+
+  **Partial live check (2026-10-21).** After both hosts were allowed, the real APIs were called with an
+  invalid key (no credits used):
+  - Tavily's real 401 body (`{"detail": {"error": "Unauthorized: missing or invalid API key."}}`) has the
+    same shape as the simulated one and is reported as "API key rejected".
+  - SerpApi's real 401 ("Invalid API key…") is reported the same way, for Google Shopping and web search.
+  - A full research stops after the first rejected request and shows the reason.
+
+  Parsing of real *successful* results still needs a valid key.
 - Direct (non-fallback) Bank of Canada and supplier-page reads: the code is the same as in tests, but that
   sandbox can't reach those sites. On a normal office network they are used first and the fallback stays idle.
 
