@@ -169,3 +169,44 @@ def test_filters_are_sent_saved_and_can_be_changed_without_searching(tmp_path):
         assert r.status_code == 200 and r.json()["result"]["filters"] == {"price_min": 330.0}
         assert [r["id"] for r in c.get("/api/searches/recent").json()] == before  # no new search was run
         assert c.put(f"/api/comparisons/{cid}/filters", json={"year_min": 1500}).status_code == 422
+
+
+def test_defining_words_must_be_in_the_listing():
+    assert ex.qualifier_words("hi-rail pickup trucks", []) == ["hi-rail"]
+    assert ex.qualifier_words("f250 or f350 truck", ["f250", "f350"]) == []
+    q = ["hi-rail"]
+    assert ex.missing_qualifiers("2018 Ford F-350 Hy-Rail truck", q) == []
+    assert ex.missing_qualifiers("F-550 with Harsco rail gear", q) == []
+    assert ex.missing_qualifiers("2026 Ram 1500 Rebel 4x4 Crew Cab", q) == ["hi-rail"]
+    assert ex.missing_qualifiers("Used Electric Lift Truck", ["forklift"]) == []  # trade spelling
+
+
+def test_hi_rail_search_shows_hi_rail_trucks_not_pickups_parts_news_or_rentals():
+    offers = [_offer(1, 64990.0, "2026 Ram 1500 Rebel 4x4 Crew Cab 5'7\" Box", supplier_type="unknown"),
+              _offer(2, 12.67, "579.1112 by Automann Magnetic Pick-Up Tool 15lb", supplier_type="unknown"),
+              _offer(3, 46.0, "Custom Truck makes Canadian acquisition - International Rental News", supplier_type="unknown"),
+              _offer(4, 110.0, "Hi-Rail Truck Rentals - Winnipeg - T & B Fleet Services", supplier_type="unknown"),
+              _offer(5, 89500.0, "2019 Ford F-350 XL Hi-Rail Pickup, 120,000 km", supplier_type="unknown")]
+    res = _run("hi-rail pickup trucks", offers, "vehicle")
+    plain = res["recommendation"]
+    assert {p["offer_id"] for p in plain["listing_pages"]} == {"O5"}
+    by = {o["id"]: o for o in res["offers"]}
+    assert by["O1"]["match_level"] == "different" and "hi-rail" in by["O1"]["match_notes"][0]
+    assert any("rental or lease rate" in r for r in by["O4"]["exclusion_reasons"])
+    assert any("Rentals were found" in n and "T & B Fleet" in n for n in plain["needed"])
+
+
+def test_no_matching_listings_says_what_to_do():
+    res = _run("hi-rail pickup trucks", [_offer(1, 64990.0, "2026 Ram 1500 Rebel 4x4", supplier_type="unknown")],
+               "vehicle")
+    assert res["recommendation"]["listing_pages"] == []
+    assert "No listing found mentions hi-rail" in res["recommendation"]["needed"][0]
+
+
+def test_scale_models_axle_lots_and_acquisition_news_are_not_trucks():
+    assert ex.vehicle_toy("Atlas HO Ford F-350 Hi-Railer Pickup Truck") == "HO"
+    assert ex.vehicle_toy("2019 Ford F-350 SD 4x4 Crew Cab HI-Rail Pickup") is None
+    assert ex.vehicle_part("Quantity of (2) Ford Pickup Hi-Rail Axles for Sale in BC")
+    assert ex.vehicle_part("2025 Ford F350 4x4 Hi-Rail Pickup Truck") is None
+    assert ex.article_words("Custom Truck One Source Acquires HiRail Leasing Group")
+    assert ex.rental_words("Hi-Rail Trucks for Rent") and ex.rental_words("2025 Ford F350 Hi-Rail Pickup Truck") is None

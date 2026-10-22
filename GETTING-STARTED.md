@@ -117,8 +117,10 @@ Not sure exactly what you need? Type a broad term such as `radios`, `work lights
 `safety glasses`. The app shows the main types and what each is for; click one to search for it. Its
 checklist (labelled general guidance) goes into your quote requests.
 
-Have the item in front of you? Click **Photo** (next to Research) and choose a photo of it, ideally showing the
-label or nameplate. The app reads what it can and suggests a search; check it, edit it if needed, then click
+Have the item in front of you, or a picture of it on screen? Click **Photo** (next to Research) and choose a
+photo, or just copy a picture (right-click > Copy Image, or a screenshot) and press Cmd+V on the page. If you've
+typed something first ("hi-rail pickup"), the photo adds detail to it instead of replacing it. A photo ideally
+shows the label or nameplate. The app reads what it can and suggests a search; check it, edit it if needed, then click
 **Research this**. Reading a photo uses the Anthropic key and costs a fraction of a cent to a few cents. **Try Google
 Lens** opens Lens if you'd rather search visually.
 

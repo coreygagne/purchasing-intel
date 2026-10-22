@@ -432,7 +432,10 @@ aren't. The changes:
   five priced options with the checklist in 8 quote drafts; it first listed "Canadian Tire Roadside
   Assistance" as an option, so shortlist options must now name the product type. Saved earlier runs re-analysed under
   the new rules: no loss of comparable prices for exact-model items.
-- **Search by photo** (with the Anthropic key): the page shrinks the photo, Claude reads what it shows and the
+- **Search by photo** (with the Anthropic key): choose a photo, paste a copied picture (Cmd/Ctrl+V anywhere on
+  the page) or drop one on the search box. What's typed in the search box stays the main search and the photo
+  adds detail to it; a model number typed is kept even if the photo doesn't show it. What the photo shows goes
+  into the quote requests ("From our reference photo: ..."). The page shrinks the photo, Claude reads what it shows and the
   text printed on its label or nameplate, and you confirm or edit the suggested search before anything is
   searched. A brand or model number is kept only if it's in the text read from the photo. The photo goes only
   to Anthropic and isn't stored; each reading's cost counts in the month's spend. "Try Google Lens" opens Lens
@@ -446,6 +449,11 @@ aren't. The changes:
 - **Toys and accessories** (diecast and scale models, truck caps, shocks) are kept out of vehicle results, and
   Google Shopping isn't searched for vehicles or property (it returns toys and accessories for them). Used
   single listings now appear in vehicle lists even when the request doesn't say "used".
+- **Defining words (live check 2026-10-22, "hi-rail pickup trucks"):** for vehicles and equipment without a
+  model number, the words that say which one is wanted ("hi-rail", "dump", "forklift") must appear in a listing
+  (trade spellings count: hy-rail, hyrail, rail gear; lift truck). Before, ordinary pickups, tools and parts
+  filled the list. Rentals and lease rates are listed separately as rental options, news and articles are left
+  out, and so are scale models (HO) and lots of parts (axles).
 - **Filters:** a Filters panel next to the search options: price range (a two-handle slider plus exact
   amounts, CAD), and for vehicles and equipment the model year range, maximum km (or miles) and maximum hours.
   They can be changed on a result without searching again (no credits). A listing outside a filter is left

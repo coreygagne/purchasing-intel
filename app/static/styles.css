@@ -114,6 +114,7 @@ button, input, select { font: inherit; color: inherit; }
 
 .searchbox { display: flex; gap: 0; border: 2px solid var(--ink); border-radius: var(--radius); background: var(--sheet); }
 .searchbox:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
+.searchbox.drop { outline: 3px dashed var(--lake); outline-offset: 3px; }
 .searchbox input {
   flex: 1; min-width: 0; border: 0; background: transparent; padding: 16px 16px; font-size: 18px; outline: none;
 }
@@ -390,6 +391,7 @@ a[data-img]::after { content: ""; display: inline-block; width: 10px; height: 8p
 @media (prefers-reduced-motion: reduce) { .peek { animation: none; } }
 /* search filters */
 .filters-btn.on { border-color: var(--ink); font-weight: 700; }
+.filters[hidden] { display: none; }
 .filters { margin-top: 12px; padding: 14px 16px; background: var(--sheet); border: 1px solid var(--rule);
   border-top: 3px solid var(--ink); border-radius: 0 0 var(--radius) var(--radius); display: grid; gap: 12px; }
 .f-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }

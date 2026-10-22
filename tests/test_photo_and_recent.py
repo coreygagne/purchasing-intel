@@ -80,3 +80,29 @@ def test_lists_show_each_comparisons_outcome(tmp_path):
         c.patch(f"/api/comparisons/{cid}", json={"saved": True})
         saved = c.get("/api/comparisons?saved=true").json()[0]
         assert saved["verdict"] == recent["verdict"]
+
+
+async def test_typed_words_lead_and_the_photo_adds_detail():
+    a, msgs = analyst(READING | {"model_numbers": [], "search_query": "portable radio with antenna",
+                                 "label_text": ["IP67"], "brand": ""})
+    out = await a.identify_photo("image/png", "aGVsbG8=", context="Motorola R7 two-way radio")
+    prompt = msgs.calls[0]["messages"][0]["content"][1]["text"]
+    assert "<their_words>Motorola R7 two-way radio</their_words>" in prompt
+    assert out["search_query"].startswith("Motorola R7 two-way radio")  # their words lead
+    assert out["context"] == "Motorola R7 two-way radio"
+
+
+async def test_model_number_typed_is_kept_even_if_the_photo_does_not_show_it():
+    a, _ = analyst(READING | {"model_numbers": [], "label_text": [], "brand": "",
+                              "search_query": "f250 hi-rail pickup white crew cab"})
+    out = await a.identify_photo("image/png", "aGVsbG8=", context="f250 hi-rail")
+    assert "f250" in out["search_query"].lower() and "f250" not in [r.lower() for r in out["removed"]]
+
+
+def test_photo_notes_go_into_quote_requests():
+    from app.rfq import rfq_drafts
+    vendor = {"id": "V1", "name": "Rail Trucks Ltd", "quote_opportunity": True, "type": "industrial distributor",
+              "emails": [], "phones": [], "tier_label": "Thunder Bay", "quote_reasons": [], "website": None}
+    body = rfq_drafts([vendor], {"name": "hi-rail pickup truck"}, 1, None,
+                      {"photo_notes": "white crew-cab pickup with rail gear; label reads HY-RAIL"}, None, "vehicle")[0]["body"]
+    assert "From our reference photo: white crew-cab pickup with rail gear" in body

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import extract as ex
 from .analysis import fmt_money
 from .evidence import Offer
 from .market import order_totals
@@ -202,9 +203,8 @@ def _filtered_out(o: Offer) -> bool:
 
 
 NOT_SELLERS = {FORUM, REVIEW, VIDEO, COMPLAINTS, DEALS, BUSINESS_DIRECTORY}
-# articles on a seller's own site: "Why the 7.3-Liter V-8 Might Be the Smart Buy", "... Blog |"
-_EDITORIAL = re.compile(r"^\W*build an? \b|\bblog\b|\bwhy (?:the|you|we)\b|\bhow to\b|\breview\b|\bvs\.?\b|\bnews\b|\?$", re.I)
-_NOT_LISTABLE = ("consumer product", "doesn't name", "not a seller's page", "price guide", "completed sale")
+_NOT_LISTABLE = ("consumer product", "doesn't name", "not a seller's page", "price guide", "completed sale", "rental",
+                 "article")
 
 
 def _listable(o: Offer) -> bool:
@@ -212,7 +212,7 @@ def _listable(o: Offer) -> bool:
     snippet-only price or a missing currency don't matter here; the person opening it sees those."""
     if o.price is None or o.price_type != "listed" or o.supplier_type in NOT_SELLERS:
         return False  # a blog post, forum thread or review that mentions a price isn't a listing
-    if _EDITORIAL.search(o.product_title or ""):
+    if ex.article_words(o.product_title):
         return False
     return not any(any(w in r for w in _NOT_LISTABLE) for r in o.exclusion_reasons)
 
@@ -225,6 +225,8 @@ def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
     out, seen = [], set()
     pool = [o for o in offers if (o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)
                                   or (options == "shortlist" and o.comparable) or (options == "listings" and _listable(o)))
+            # nothing to buy there: a rental, an article, a sold item, a value guide, a non-seller
+            and not any(any(w in r for w in _NOT_LISTABLE) for r in o.exclusion_reasons)
             # only pages about the item asked for: not another model, a part for it or a different variant
             and o.match_level not in ("different", "compatible", "variant") and not o.spec_conflicts
             and not _filtered_out(o)]

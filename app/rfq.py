@@ -51,6 +51,8 @@ def rfq_drafts(vendors: list[dict[str, Any]], identity: dict[str, Any], quantity
         if use:
             lines.append(f"  Intended use: {use}")
         lines += [f"  {r}" for r in reqs]
+        if answers.get("photo_notes"):
+            lines.append(f"  From our reference photo: {answers['photo_notes']} (photo available on request)")
         lines += ["", "Please include:",
                   "  - unit price and total in CAD, before tax",
                   "  - any trade, contractor or volume pricing, and the minimum order",

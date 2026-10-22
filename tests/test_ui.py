@@ -257,3 +257,18 @@ def test_filters_panel_slider_and_apply_to_result(servers, browser):
     page.wait_for_selector("text=Filter these results")
     assert errors == []
     page.close()
+
+
+def test_pasting_a_picture_starts_a_photo_search(servers, browser, tmp_path):
+    import base64
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(servers["ready"])
+    b64 = base64.b64encode(_png(tmp_path / "copied.png").read_bytes()).decode()
+    page.evaluate("""(b64) => {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const dt = new DataTransfer();
+        dt.items.add(new File([bytes], "copied.png", { type: "image/png" }));
+        document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+    }""", b64)
+    page.wait_for_selector("text=Photo not read")  # the test server has no AI key: Google Lens is offered instead
+    page.close()

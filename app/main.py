@@ -75,6 +75,8 @@ def verdict(result: dict[str, Any] | None) -> dict[str, Any] | None:
 class PhotoBody(BaseModel):
     # a data URL from the browser ("data:image/jpeg;base64,..."), already shrunk to about 1600 px by the page
     image: str = Field(min_length=20, max_length=8_000_000)
+    # what the person typed in the search box: the photo adds detail to it
+    context: str | None = Field(default=None, max_length=600)
 
 
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -253,7 +255,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             return JSONResponse(status_code=402, content={"error": "budget", **lens,
                                                           "message": "This month's AI spending limit is reached."})
         try:
-            found = await engine.llm.identify_photo(m.group(1), base64.b64encode(raw).decode())
+            context = body.context if body.context and ex.classify_input(body.context) != "url" else None
+            found = await engine.llm.identify_photo(m.group(1), base64.b64encode(raw).decode(), context)
         except LlmError as exc:
             return JSONResponse(status_code=502, content={"error": "ai", **lens,
                                                           "message": f"The photo couldn't be read: {exc}."})

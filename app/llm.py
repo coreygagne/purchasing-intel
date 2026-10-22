@@ -292,12 +292,19 @@ class ClaudeAnalyst:
                       "input_tokens": getattr(usage, "input_tokens", None),
                       "output_tokens": getattr(usage, "output_tokens", None)}
 
-    async def identify_photo(self, media_type: str, data_b64: str) -> dict[str, Any]:
+    async def identify_photo(self, media_type: str, data_b64: str, context: str | None = None) -> dict[str, Any]:
         """What a photo shows, the text printed on it, and a search for it. A brand or model number is kept only
-        when it's in the text read from the photo; anything else is removed and said so."""
+        when it's in the text read from the photo or in the person's own words; anything else is removed and said
+        so. `context`: what the person typed, which the photo adds detail to."""
+        context = (context or "").strip()[:300]
+        said = (
+            f"They describe what they want as: <their_words>{context}</their_words>. Use the photo to add details "
+            "that fit their words (type, features, size, brand if printed); never contradict their words. For "
+            "search_query, start from their words and add the photo's most useful details.\n\n"
+        ) if context else ""
         user = (
             "This photo was taken by a purchasing person at an industrial site (marine terminal, rail yard, "
-            "warehouse) who wants to buy this item, or a replacement for it.\n\n"
+            "warehouse) who wants to buy this item, or a replacement for it, or something like it.\n\n" + said +
             "Return: what - a plain description of the item (type, and size or rating if visible); label_text - "
             "every piece of text printed on the item, its labels or nameplate, copied exactly as printed (empty "
             "if none is readable); brand and model_numbers - only if printed and readable in the photo, never "
@@ -307,7 +314,7 @@ class ClaudeAnalyst:
         )
         data, usage = await self._call(user, PHOTO_SCHEMA, 4000, image=(media_type, data_b64))
         labels = [t.strip()[:160] for t in data.get("label_text", []) if t.strip()][:15]
-        printed = _alnum(" ".join(labels))
+        printed = _alnum(" ".join(labels) + " " + context)  # their own words count as stated
         models = [m.strip()[:60] for m in data.get("model_numbers", []) if m.strip()]
         kept = [m for m in models if _alnum(m) and _alnum(m) in printed]
         removed = [m for m in models if m not in kept]
@@ -322,7 +329,10 @@ class ClaudeAnalyst:
                 removed.append(tok)
         what = data.get("what", "").strip()[:200]
         query = re.sub(r"\s+", " ", query).strip() or " ".join(x for x in (brand, *kept[:1], what) if x)[:200]
+        if context and _alnum(context) not in _alnum(query):
+            query = f"{context} {query}"[:200] if query else context  # their words always lead the search
         return {"what": what, "brand": brand, "model_numbers": kept, "label_text": labels, "search_query": query,
+                "context": context,
                 "confidence": data.get("confidence", "low"), "notes": data.get("notes", "").strip()[:400],
                 "removed": list({_alnum(r): r for r in reversed(removed)}.values())[::-1], "_usage": usage}
 

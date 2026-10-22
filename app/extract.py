@@ -281,7 +281,73 @@ _VEHICLE_PART = re.compile(
     r"\binjectors?\b|\bturbo(?:chargers?)?\b|\bfilters?\b|\bbrakes?\b|\brotors?\b|\bcalipers?\b|\bparts?\b|"
     r"\baccessor(?:y|ies)\b|\bgauges?\b|\bcluster\b|\bantennas?\b|\bdecals?\b|\bemblems?\b|\brunning boards?\b|"
     r"\bnerf bars?\b|\bwinch(?:es)?\b|\bwipers?\b|\balternators?\b|\bradiators?\b|\btailgate\b|\bgaskets?\b|"
-    r"\btruck caps?\b|\bcanopy\b|\btoppers?\b|\bhydro\b|\bfrt\b|\bskyjacker\b|\brough country\b|\bbilstein\b", re.I)
+    r"\btruck caps?\b|\bcanopy\b|\btoppers?\b|\bhydro\b|\bfrt\b|\bskyjacker\b|\brough country\b|\bbilstein\b|"
+    r"\bthermostats?\b|\bwrench(?:es)?\b|\bpick-?up tools?\b|\bsensors?\b|\bpumps?\b|\bvalves?\b|\bhoses?\b|"
+    r"\bbelts?\b|\bbearings?\b|\bseals?\b", re.I)
+# words that don't say which vehicle or machine is wanted ("pickup trucks for sale"): everything else in a request
+# without a model number ("hi-rail", "dump", "forklift", "Toyota") must appear in a listing for it to be the item
+_GENERIC_WORDS = {"truck", "trucks", "pickup", "pickups", "pick", "up", "vehicle", "vehicles", "car", "cars", "van", "vans",
+                  "new", "used", "for", "sale", "with", "and", "or", "the", "a", "an", "of", "4x4", "4wd", "2wd", "awd",
+                  "crew", "cab", "equipment", "machine", "machines", "machinery", "unit", "units", "heavy", "duty",
+                  "buy", "price", "prices", "cheap", "best", "good", "lb", "lbs", "kg", "ton", "tons", "tonne", "ft",
+                  "near", "me", "local", "thunder", "bay", "ontario", "canada"}
+# trade spellings of the same thing, compared with spaces and hyphens removed
+_SAME_THING = {"hirail": ("hirail", "hyrail", "highrail", "railgear", "railwheel"),
+               "hyrail": ("hirail", "hyrail", "highrail", "railgear", "railwheel"),
+               "forklift": ("forklift", "lifttruck"), "skidsteer": ("skidsteer",),
+               "telehandler": ("telehandler", "telescopichandler"), "reachstacker": ("reachstacker",)}
+
+
+def _squash_alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def qualifier_words(request: str, tokens: list[str]) -> list[str]:
+    """The words that say which vehicle or machine is wanted, for a request without a model number: "hi-rail
+    pickup trucks" -> ["hi-rail"]. Generic words, numbers, years and units are left out."""
+    toks = {_squash_alnum(t) for t in tokens}
+    out = []
+    for w in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", (request or "").lower()):
+        sq = _squash_alnum(w)
+        if (not sq or sq in _GENERIC_WORDS or sq in toks or sq.isdigit() or len(sq) < 3
+                or re.fullmatch(r"\d+(?:lb|lbs|kg|ft|in|t|ton|tons|hp|v|kw|km)", sq)):
+            continue
+        out.append(w)
+    return list(dict.fromkeys(out))
+
+
+def missing_qualifiers(text: str, words: list[str]) -> list[str]:
+    """Which of the request's defining words a listing's text doesn't mention (trade spellings count)."""
+    sq = _squash_alnum(text)
+    missing = []
+    for w in words:
+        stem = _squash_alnum(w)
+        stem = stem[:-1] if stem.endswith("s") and len(stem) > 4 else stem
+        if not any(f in sq for f in _SAME_THING.get(stem, (stem,))):
+            missing.append(w)
+    return missing
+
+
+_RENTAL = re.compile(r"\brentals?\b|\bfor rent\b|\bper (?:day|week|month)\b|/(?:day|week|month)\b|"
+                     r"\b(?:daily|weekly|monthly) rates?\b|\bfor lease\b|\blease (?:from|for|rate)\b", re.I)
+# an article or post on a site, not a listing: "Custom Truck makes Canadian acquisition - International Rental News"
+_ARTICLE = re.compile(r"^\W*build an? \b|\bblog\b|\bwhy (?:the|you|we)\b|\bhow to\b|\breviews?\b|\bvs\.?\b|"
+                      r"\bnews\b|\bacquisitions?\b|\bacquir(?:es|ed|ing)\b|\bannounces?\b|\bpress release\b|\?\s*$",
+                      re.I)
+
+
+def rental_words(text: str) -> str | None:
+    """The words showing a listing is a rental or lease rate, not a sale price ("Rentals", "/day"), or None."""
+    m = _RENTAL.search(text or "")
+    return m.group(0) if m else None
+
+
+def article_words(title: str) -> str | None:
+    """The words showing a page is an article or post, not a listing ("News", "Blog", "Why the ..."), or None."""
+    m = _ARTICLE.search(title or "")
+    return m.group(0) if m else None
+
+
 # toys and scale models of a vehicle: "Greenlight ... 1:64 Diecast", "Matchbox 2017 Ford F-350"
 _VEHICLE_TOY = re.compile(r"\bdie-?cast\b|\b1\s?:\s?\d{2,3}\b|\bscale model\b|\bmatchbox\b|\bhot wheels\b|\bgreenlight\b|"
                           r"\btoys?\b|\breplica\b|\bmodel kit\b|\blego\b|\bremote control\b|\brc (?:car|truck)\b|"
@@ -291,14 +357,25 @@ _VEHICLE_AD = re.compile(r"^\W*(?:19|20)\d\d\b(?!\s*[-–/]\s*(?:19|20)?\d\d)|\b
                          r"\bfor sale\b|\b(?:crew|super) ?cab\b|\bsupercrew\b", re.I)
 
 
+_MODEL_TRAIN = re.compile(r"\b(?:HO|N|O|S|G)\b(?= scale| gauge| Ford| Chevy| GMC| Dodge)|\bHO\b")  # case matters: HO scale
+
+
 def vehicle_toy(title: str) -> str | None:
-    """The words showing a listing is a toy or scale model of a vehicle ("1:64", "Diecast", "Matchbox"), or None."""
-    m = _VEHICLE_TOY.search(title or "")
+    """The words showing a listing is a toy or scale model of a vehicle ("1:64", "Diecast", "Matchbox", "HO"),
+    or None."""
+    m = _VEHICLE_TOY.search(title or "") or _MODEL_TRAIN.search(title or "")
     return m.group(0) if m else None
+
+
+# a part or lot of parts even when it says "for sale": "Quantity of (2) Ford Pickup Hi-Rail Axles for Sale"
+_STRONG_PART = re.compile(r"\baxles?\b|^\W*(?:quantity|qty|lot) of\b|\bparts? only\b|\brail gear only\b", re.I)
 
 
 def vehicle_part(title: str) -> str | None:
     """The words showing a listing is a part or accessory for a vehicle ("lift kit", "bumper"), or None."""
+    strong = _STRONG_PART.search(title or "")
+    if strong:
+        return strong.group(0)
     m = _VEHICLE_PART.search(title or "")
     if not m or _VEHICLE_AD.search(title or ""):
         return None

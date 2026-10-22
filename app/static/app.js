@@ -393,6 +393,21 @@ try { const saved = localStorage.getItem("pi-area"); if (saved) setArea(saved); 
   try { localStorage.setItem("pi-area", currentArea()); } catch { /* storage unavailable */ }
 }));
 $("#photo").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) searchByPhoto(f); });
+// Paste a copied picture anywhere on the page (Cmd/Ctrl+V), or drop one on the search box: no saving a file first
+document.addEventListener("paste", (e) => {
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === "file" && i.type.startsWith("image/"));
+  if (!item) return;  // ordinary text pastes are left alone
+  e.preventDefault();
+  searchByPhoto(item.getAsFile());
+});
+const box = document.querySelector(".searchbox");
+box.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } });
+box.addEventListener("dragleave", () => box.classList.remove("drop"));
+box.addEventListener("drop", (e) => {
+  box.classList.remove("drop");
+  const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith("image/"));
+  if (f) { e.preventDefault(); searchByPhoto(f); }
+});
 
 // Search by photo: the page shrinks the photo (Claude reads up to about 1,600 px, and it uploads faster), the app
 // asks Claude what it shows and what's printed on it, and nothing is searched until you confirm or edit it.
@@ -404,7 +419,9 @@ async function searchByPhoto(file) {
     flash(photoProblem({ message: "This photo format can't be opened here. Save it as a JPEG or PNG and try again." }));
     return;
   }
-  const r = await api("/api/photo", { method: "POST", body: JSON.stringify({ image: dataUrl }) });
+  // what's typed in the search box is what they want: the photo adds detail to it
+  const context = $("#q").value.trim() || null;
+  const r = await api("/api/photo", { method: "POST", body: JSON.stringify({ image: dataUrl, context }) });
   flash(r.ok ? photoCard(r.body, dataUrl) : photoProblem({ message: r.body?.message || r.body?.detail || "The photo couldn't be read.",
     google_lens: r.body?.google_lens }));
 }
@@ -435,11 +452,15 @@ function photoProblem(p) {
 
 function photoCard(p, dataUrl) {
   const input = h("input", { type: "text", value: p.search_query, maxlength: "600", "aria-label": "Search for" });
-  const go = (e) => { e.preventDefault(); const q = input.value.trim(); if (!q) return; $("#q").value = q; startResearch({ query: q }); };
+  // what the photo shows goes along as context: into the quote requests ("From our reference photo: ...")
+  const notes = [p.what, p.label_text.length ? `label reads ${p.label_text.slice(0, 4).join(", ")}` : ""].filter(Boolean).join("; ");
+  const go = (e) => { e.preventDefault(); const q = input.value.trim(); if (!q) return; $("#q").value = q;
+    startResearch({ query: q, extraAnswers: notes ? { photo_notes: notes.slice(0, 200) } : null }); };
   return h("form", { class: "notice info photo-card", onsubmit: go },
     h("img", { src: dataUrl, alt: "Your photo" }),
     h("div", { class: "photo-body" },
-      h("h3", {}, "From your photo"),
+      h("h3", {}, p.context ? "Your words, with details from your photo" : "From your photo"),
+      p.context ? h("p", { class: "small", style: "margin:0 0 6px" }, "You typed: ", h("b", {}, p.context)) : null,
       h("p", { style: "margin:0 0 6px" }, h("b", {}, p.what || "Item not identified"), " ",
         h("span", { class: `conf ${p.confidence}` }, `${p.confidence} confidence`)),
       h("p", { class: "small", style: "margin:0 0 6px" }, "Text read from the photo: ",
@@ -466,7 +487,7 @@ async function startResearch(opts = {}) {
     // clarify first: a few optional questions, only when the answer would change the results (free, no search)
     const c = await api("/api/clarify", { method: "POST", body: JSON.stringify({ query, quantity: qty }) });
     if (c.ok && (c.body.questions.length || c.body.guide?.broad)) {
-      flash(clarifyCard(c.body, (answers) => startResearch({ ...opts, query, depth, quantity: qty, answers }),
+      flash(clarifyCard(c.body, (answers) => startResearch({ ...opts, query, depth, quantity: qty, answers: { ...answers, ...(opts.extraAnswers || {}) } }),
         (term) => { $("#q").value = term; startResearch({ ...opts, query: term, depth, quantity: qty }); }));
       return;
     }
@@ -474,7 +495,7 @@ async function startResearch(opts = {}) {
   const area = opts.area || currentArea();
   const filters = opts.filters || collectFilters();
   const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty, area, filters,
-    force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || null }) });
+    force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || opts.extraAnswers || null }) });
   if (r.status === 503) { flash(setupNotice(r.body?.setup)); return; }
   if (r.status === 402) {
     flash(h("div", { class: "notice" }, h("h3", {}, "Monthly spending limit reached"), h("p", { style: "margin:0" }, r.body?.message || "")));
@@ -719,7 +740,7 @@ function leadCard(plain, res) {
       h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
       pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier, null, p.image), p.local ? " (Thunder Bay)" : "",
-        `: ${p.title}`, factsText(p.facts), p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
+        `: ${p.title}`, factsText(p.facts), p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${p.currency ? money(p.price, p.currency) : `${Number(p.price).toLocaleString("en-CA")} (currency not stated)`}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
         h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
       h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
       h("div", { class: "next" }, h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")));
@@ -936,8 +957,10 @@ function comparisonTable(res) {
     h("th", {}, "Terms"), h("th", {}, "Evidence"), h("th", {}, h("span", { class: "sr-only" }, "Details"))));
   const COLS = 9;
   return h("section", { style: "margin-top:26px" },
-    h("h2", {}, `Comparable offers (${comparable.length})`),
-    h("p", { class: "small muted", style: "margin-top:-4px" }, res.recommendations.basis
+    h("h2", {}, res.recommendation?.judge ? `Priced listings found (${comparable.length})` : `Comparable offers (${comparable.length})`),
+    h("p", { class: "small muted", style: "margin-top:-4px" }, res.recommendation?.judge
+      ? "Not ranked: these are for you to judge (see above). Shown by price only to make them easy to scan."
+      : res.recommendations.basis
       ? `Ranked by ${res.recommendations.basis}. Same item, new condition, single published price, convertible to CAD.`
       : "Offers must be the same item, new, with a single published price convertible to CAD."),
     comparable.length ? h("div", { class: "table-wrap" }, h("table", { class: "cmp" }, head(),

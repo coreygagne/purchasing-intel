@@ -37,7 +37,7 @@ from .discovery import PlannedQuery
 from .providers import LocalBusiness, ProviderError, ProviderSet, ShoppingListing, build_providers
 from .providers.anthropic_fetch import VIA, AnthropicFetcher, AnthropicPageReader
 from .providers.base import SearchHit
-from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER, domain_of, is_platform_domain
+from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER, RETAILER, UNKNOWN, domain_of, is_platform_domain
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 9
+ANALYSIS_VERSION = 10
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -771,7 +771,10 @@ def _apply_filters(o: Offer, f: dict[str, float], category: str) -> None:
     if single and len(years) == 1:
         facts["year"] = years[0]
     if single and category in ("vehicle", "machinery"):
-        km, hours = ex.odometer_km(text), (ex.machine_hours(text) if category == "machinery" else None)
+        # km and hours belong to this listing only if it's one vehicle's ad (one model year in its title) or the
+        # title itself states them; a dealer's home page or an auction page quotes some other unit's numbers
+        src = text if len(years) == 1 else o.product_title
+        km, hours = ex.odometer_km(src), (ex.machine_hours(src) if category == "machinery" else None)
         if km is not None:
             facts["km"] = km
         if hours is not None:
@@ -878,6 +881,15 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     # a type rather than a model ("portable two-way radio"): different makers' models aren't ranked by price
     shortlist = not judge and not tokens and guides.match(name) is not None
     apply_match(offers, tokens, by_id, specs, length, category=category, any_of=ex.alternative_models(name, tokens))
+    # without a model number, the words that say which vehicle or machine is wanted ("hi-rail") must be in the
+    # listing: otherwise any pickup, or any part with "truck" in its name, would pass
+    quals = ex.qualifier_words(name, tokens) if category in ("vehicle", "machinery") and not tokens else []
+    if quals:
+        for o in offers:
+            missing = ex.missing_qualifiers(f"{o.product_title} {o.evidence_quote or ''}", quals)
+            if missing and o.match_level != "different":
+                o.match_level = "different"
+                o.match_notes = [f"Doesn't mention {', '.join(missing)}."]
     if category == "vehicle":
         for o in offers:
             toy, part = ex.vehicle_toy(o.product_title), ex.vehicle_part(o.product_title)
@@ -891,8 +903,20 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
                             badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
     area = meta.get("area") or "both"
     filters = {k: v for k, v in (meta.get("filters") or {}).items() if v is not None}
+    rentals: list[Offer] = []
     for o in offers:
         _apply_filters(o, filters, category)
+        article = ex.article_words(o.product_title) if o.supplier_type in (UNKNOWN, None) else None
+        if article:
+            o.exclusion_reasons.append(f"an article, not a listing ('{article}')")
+            o.comparable = False
+        rental = ex.rental_words(f"{o.product_title} {o.evidence_quote or ''}") \
+            if category in ("vehicle", "machinery") and not article else None
+        if rental:
+            o.exclusion_reasons.append(f"a rental or lease rate ('{rental}'), not a sale price")
+            o.comparable = False
+            if o.match_level not in ("different", "compatible"):
+                rentals.append(o)
         local = ((by_id.get(o.source_id or "") and by_id[o.source_id].location) or {}).get("tier") == "local"
         if area == "local" and not local:
             o.exclusion_reasons.append("not shown to be in Thunder Bay (you chose Thunder Bay only)")
@@ -941,6 +965,12 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     used_ok = (meta.get("plan") or {}).get("used_ok", True)
     plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok, clean,
                                 judge="listings" if judge else ("shortlist" if shortlist else None))
+    if judge and quals and not plainly["listing_pages"]:
+        plainly["needed"].insert(0, f"No listing found mentions {' / '.join(quals)}. Specialist dealers and upfitters "
+                                    "usually sell these: ask the local dealers below, and send quote requests.")
+    if rentals:
+        names = ", ".join(dict.fromkeys(f"{o.supplier} ({o.product_title[:60]})" for o in rentals[:3]))
+        plainly["needed"].append(f"Rentals were found, if renting suits the job: {names}.")
     rfqs = rfq_drafts(vendors, identity, quantity, length, meta.get("answers"), compliance, category)
     cov = coverage_report(meta, sources, offers, vendors, market)
     quality = an.quality_evidence(sources, offers, tokens)

@@ -107,7 +107,7 @@ def apply_answers(query: str, answers: dict[str, Any] | None, quantity: int | No
 
     Answers stored as None mean "skipped"."""
     raw = {k: _clean(v) for k, v in (answers or {}).items() if k in {q["id"] for q in all_questions(query, None)}
-           or k in ("quantity", "used_ok", "intended_use", "needed_by")}
+           or k in ("quantity", "used_ok", "intended_use", "needed_by", "photo_notes")}
     asked = {q["id"]: q for q in all_questions(query, quantity)}
     out: dict[str, Any] = {"answers": raw, "quantity": quantity, "used_ok": True, "spec_text": "", "length_text": None,
                            "assumptions": [], "intended_use": raw.get("intended_use"),
