@@ -24,6 +24,7 @@ GROUPS = [
     ("new_retail", "New - retail and marketplace asking prices"),
     ("new_trade", "New - published trade / wholesale prices (distributors, manufacturers, B2B)"),
     ("used", "Used or refurbished - asking prices"),
+    ("unstated", "Condition not stated - asking prices (classifieds, dealers, auctions)"),
     ("current_bids", "Auctions in progress - current bids (final prices will be higher)"),
     ("completed_sales", "Completed sales - what items sold for"),
 ]
@@ -42,13 +43,19 @@ def _set_aside(o: Offer) -> bool:
     return any(f.startswith("Not recommended: priced far below") for f in o.flags)
 
 
-def _group(o: Offer) -> str:
+_AD_TYPES = {"classifieds / used", "auction / surplus"}
+
+
+def _group(o: Offer, category: str | None = None) -> str:
     if o.price_kind == "completed_sale":
         return "completed_sales"
     if o.price_kind == "current_bid":
         return "current_bids"
     if o.condition and o.condition != "new":
         return "used"
+    if not o.condition and (o.supplier_type in _AD_TYPES or category in ("vehicle", "machinery", "property")):
+        # an ad or a vehicle/equipment listing that doesn't say: never assumed to be new
+        return "unstated"
     if o.supplier_type in TRADE or o.moq:
         return "new_trade"
     return "new_retail"
@@ -59,8 +66,9 @@ def _basis(eligible: list[Offer], order_length: dict[str, Any] | None) -> tuple[
     per_len = [o for o in eligible if o.per_ft_cad is not None]
     if order_length or (per_len and len(per_len) * 2 >= len(eligible)):
         return "per_ft", "CAD per foot"
-    if sum(1 for o in eligible if o.pack_qty) >= 2 and len({o.pack_qty for o in eligible}) > 1:
-        return "per_unit", "CAD per unit (listings without a pack size counted as one unit)"
+    stated = [o for o in eligible if o.pack_qty and not o.per_length]
+    if len(stated) >= 2:
+        return "per_unit", "CAD per unit (listings that don't state a pack size left out)"
     return "listing", "CAD per listing"
 
 
@@ -69,18 +77,19 @@ def _value(o: Offer, basis: str) -> float | None:
         return o.per_ft_cad
     if o.per_length:
         return None  # a per-foot price can't sit with per-item prices
-    if basis == "per_unit" and o.pack_qty and o.price_cad is not None:
-        return round(o.price_cad / o.pack_qty, 4)
+    if basis == "per_unit":
+        # a listing without a pack size can't be put per unit: "$4.99" may be one glove or a box of 100
+        return round(o.price_cad / o.pack_qty, 4) if o.pack_qty and o.price_cad is not None else None
     return o.price_cad
 
 
-def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str, Any] | None = None
-                 ) -> dict[str, Any]:
+def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str, Any] | None = None,
+                 category: str | None = None) -> dict[str, Any]:
     eligible = [o for o in offers if o.price_cad is not None and o.price_type == "listed" and _same_item(o, tokens)]
     basis, basis_label = _basis(eligible, order_length)
     groups = []
     for key, label in GROUPS:
-        members = [(o, _value(o, basis)) for o in eligible if _group(o) == key]
+        members = [(o, _value(o, basis)) for o in eligible if _group(o, category) == key]
         members = [(o, v) for o, v in members if v is not None]
         aside = [o for o, _ in members if _set_aside(o)]
         used = [(o, v) for o, v in members if not _set_aside(o)]

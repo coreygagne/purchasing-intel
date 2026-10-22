@@ -16,8 +16,8 @@ from . import extract as ex
 from .db import iso
 from .fetch import FetchResult
 from .providers.base import SearchHit, ShoppingListing
-from .suppliers import (AUCTION, B2B_MARKETPLACE, COUNTRY_CURRENCY, GOVERNMENT, MARKETPLACE, REVIEW_TYPES,
-                        SELLER_TYPES, UNKNOWN, classify_source, domain_of, lookup_by_name)
+from .suppliers import (AUCTION, B2B_MARKETPLACE, CLASSIFIEDS, COUNTRY_CURRENCY, GOVERNMENT, MARKETPLACE,
+                        REVIEW_TYPES, SELLER_TYPES, UNKNOWN, classify_source, domain_of, lookup_by_name)
 
 # Searches whose results can be offers to buy. The channel names come from the research plan (discovery.py);
 # "price", "suppliers" and "cross_border" are from comparisons saved before it.
@@ -118,6 +118,10 @@ class Offer:
     # what the price is: "asking" (an offer to sell), "current_bid" (an auction in progress) or
     # "completed_sale" (what an item sold for - market evidence, not an offer you can buy at)
     price_kind: str = "asking"
+    # what the page is, when it isn't one offer: "results" (a page listing many products or ads, so the price
+    # can't be tied to one) or "valuation" (a price guide or value estimate); with a short reason
+    page_kind: str | None = None
+    page_kind_note: str | None = None
     # requested specs (plain-language requests) this listing's own text confirms / doesn't state / contradicts
     spec_confirmed: list[str] = field(default_factory=list)
     spec_missing: list[str] = field(default_factory=list)
@@ -513,8 +517,67 @@ def is_search_results_url(url: str) -> bool:
     return bool(_SEARCH_PAGE_RE.search(url or ""))
 
 
+# "118 ads for 5000 lb forklift in Ontario", "More than 180 in Forklifts", "... Nationwide: 304 Listings",
+# "(34) Forklift Rental Options", "Showing 1-24 of 310"
+_MANY_TITLE = re.compile(r"^\W*\d[\d,]*\+?\s+(?:ads?|results?|listings?|items?|products?|matches)\b|"
+                         r"\bmore than \d[\d,]*\+?\s+(?:in|results?|listings?|ads?|items?|products?)\b|"
+                         r"\b\d[\d,]*\+?\s+(?:listings|results|ads)\b|^\(\d[\d,]*\)\s|"
+                         r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d", re.I)
+# "2019 Ford F-150 for Sale in Ontario", "Used Forklifts For Sale | Crown": an inventory or category page unless
+# its address names one listing ("/listing/for-sale/236473081/...", "...-id14472759.html")
+_FOR_SALE_MANY = re.compile(r"\bfor (?:sale|rent|lease)\b(?:\s+(?:in|near|nationwide|across|around)\b|"
+                            r"\s*(?:[|:\-–·]|$))", re.I)
+_LISTING_ID = re.compile(r"\d{6,}|[-_]id\d{3,}", re.I)
+_VALUATION = re.compile(r"value[-\s]?calculator|appraisal|trade[-\s]?in[-\s]value|book[-\s]value|blue[-\s]?book|"
+                        r"\bkbb\b|price[-\s]trends|pricing insights|\bvaluation|"
+                        r"\bvalue (?:canada|guide|estimate|range|report)\b|\b(?:car|vehicle|truck|equipment) value\b|"
+                        r"/value(?:/|$)|trim levels? (?:&|and) prices", re.I)
+_VALUATION_QUOTE = re.compile(r"\bvalue (?:ranges?|is estimated)\s+(?:between|from)\b|\bestimated (?:market |trade-in )?"
+                              r"value\b", re.I)
+
+
+def page_kind(title: str, url: str, quote: str = "", ads: bool = False) -> tuple[str, str] | None:
+    """("valuation", why) for a price guide or value estimate, ("results", why) for a page listing many
+    products or ads, or None for a page about one offer. `ads`: vehicle, equipment or property listings and
+    classifieds, whose inventory pages are titled "... for Sale in <place>"."""
+    parts = urlsplit(url or "")
+    path = parts.path + ("?" + parts.query if parts.query else "")
+    if _VALUATION.search(title or "") or _VALUATION.search(path) or _VALUATION_QUOTE.search(quote or ""):
+        return "valuation", "a price guide or value estimate, not an offer to sell"
+    if is_search_results_url(url):
+        return "results", "the site's search-results page, which lists many products or sellers"
+    m = _MANY_TITLE.search(title or "")
+    if m:
+        return "results", f"a page listing many ('{m.group(0).strip()}...')"
+    if ads and _FOR_SALE_MANY.search(title or "") and not _LISTING_ID.search(path):
+        return "results", "an inventory or category page listing many ads (its title and address name no single listing)"
+    return None
+
+
+AD_CATEGORIES = {"vehicle", "machinery", "property"}
+AD_SUPPLIER_TYPES = {CLASSIFIEDS, AUCTION}
+
+
+def _check_specs(specs: list[dict[str, Any]], listing: str, title: str) -> dict[str, list[str]]:
+    """Requested specs against the listing's words. A model year is read from the title only: snippets and pages
+    mention other years (similar ads, copyright lines)."""
+    years = [sp for sp in specs if sp["dim"] == "model year"]
+    others = [sp for sp in specs if sp["dim"] != "model year"]
+    out = ex.spec_check(others, listing) if others else {"confirmed": [], "missing": [], "conflicts": []}
+    seen = ex.model_years(title)
+    for sp in years:
+        if int(sp["num"]) in seen:
+            out["confirmed"].append(sp["label"])
+        elif seen:
+            out["conflicts"].append(f"listing says {', '.join(map(str, seen))}; you asked for {sp['label']}")
+        else:
+            out["missing"].append(sp["label"])
+    return out
+
+
 def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source],
-                specs: list[dict[str, Any]] | None = None, order_length: dict[str, Any] | None = None) -> None:
+                specs: list[dict[str, Any]] | None = None, order_length: dict[str, Any] | None = None,
+                category: str | None = None) -> None:
     for o in offers:
         o.spec_confirmed, o.spec_missing, o.spec_conflicts = [], [], []
         if order_length and not o.per_length and o.price is not None:
@@ -526,7 +589,7 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             # only the listing's own words count: its title, page data and quoted text
             listing = " ".join([o.product_title, *o.specs.values(), *o.identifiers.values(),
                                 o.evidence_quote if o.price_basis in ("snippet", "llm_verified", "shopping_api") else ""])
-            chk = ex.spec_check(specs, listing)
+            chk = _check_specs(specs, listing, o.product_title)
             o.spec_confirmed, o.spec_missing, o.spec_conflicts = chk["confirmed"], chk["missing"], chk["conflicts"]
         if o.price_basis == "llm_verified":
             # the page title names the main product; the price may belong to an accessory on the same page
@@ -553,7 +616,10 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
         if o.price_type == "quote_required":
             o.price_label = "Quote required"
         o.confidence = CONFIDENCE.get(o.price_basis, "n/a")
-        if is_search_results_url(o.url) and o.confidence in ("high", "medium"):
+        kind = page_kind(o.product_title, o.url, o.evidence_quote or "",
+                         ads=category in AD_CATEGORIES or o.supplier_type in AD_SUPPLIER_TYPES)
+        o.page_kind, o.page_kind_note = kind if kind else (None, None)
+        if o.page_kind and o.confidence in ("high", "medium"):
             o.confidence = "low"
 
 

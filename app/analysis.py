@@ -14,12 +14,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import extract as ex
-from .evidence import Offer, Source, canonical_url, is_search_results_url
+from .evidence import Offer, Source, canonical_url
 from .fx import FxRate
 from .import_costs import delivered_estimate
 from .suppliers import (AUCTION, B2B_MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, COMPLAINTS, COUNTRY_NAMES,
                         DEALS, DISTRIBUTOR, FORUM, GOVERNMENT, MANUFACTURER, MARKETPLACE, PROPERTY_SITE, RETAILER,
-                        REVIEW, UNKNOWN, VIDEO)
+                        REVIEW, UNKNOWN, VIDEO, is_non_commercial)
 
 SUPPLIER_TYPE_POINTS = {DISTRIBUTOR: 15, MANUFACTURER: 15, RETAILER: 12, MARKETPLACE: 5, B2B_MARKETPLACE: 3,
                         CLASSIFIEDS: 0, AUCTION: 0, PROPERTY_SITE: 5, UNKNOWN: 2}
@@ -73,8 +73,12 @@ def _offer_dict(o: Offer) -> dict[str, Any]:
 
 def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int | None,
                          order_length: dict[str, Any] | None = None,
-                         badges_by_source: dict[str, list[str]] | None = None) -> None:
+                         badges_by_source: dict[str, list[str]] | None = None,
+                         wanted_condition: str | None = None) -> None:
+    """`wanted_condition`: "used" when the request asks for used ("used forklift"): used and refurbished
+    listings are then what's compared."""
     badges_by_source = badges_by_source or {}
+    used_ok = wanted_condition in ("used", "refurbished", "open box")
     for o in offers:
         reasons: list[str] = []
         if o.price_type == "quote_required":
@@ -89,8 +93,15 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append({"variant": "different variant/kit or suffix not confirmed",
                             "compatible": "compatible/aftermarket item, not the original",
                             "different": "requested model not found in listing"}.get(o.match_level, "not verified as same item"))
-        if o.condition and o.condition not in ("new",):
+        if o.condition and o.condition not in ("new",) and not (used_ok and o.condition in ("used", "refurbished",
+                                                                                           "open box")):
             reasons.append(f"condition: {o.condition}")
+        if o.page_kind == "valuation":
+            reasons.append("price guide or value estimate - market evidence, not an offer to sell")
+        elif o.page_kind == "results" and o.price is not None:
+            reasons.append(f"price from {o.page_kind_note} - open it and choose one listing to compare")
+        if is_non_commercial(o.supplier_domain):
+            reasons.append("not a seller's page (government, news, education or reference site)")
         if o.price_kind == "completed_sale":
             reasons.append("completed sale (what one sold for) - market evidence, not an offer you can buy at")
         elif o.price_kind == "current_bid":
@@ -120,9 +131,6 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
         # informational flags
         if o.price_basis == "snippet" and o.comparable:
             o.flags.append("Price only seen in a search snippet - confirm on the supplier page.")
-        if is_search_results_url(o.url) and o.price is not None:
-            o.flags.append("Price seen on the site's search-results page, which lists several products or sellers - "
-                           "open it to confirm which listing this price belongs to.")
         if o.currency_basis.startswith("inferred"):
             o.flags.append(f"Currency {o.currency} {o.currency_basis}.")
         if o.country != "CA":
@@ -149,6 +157,22 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             o.flags.append(f"Priced {ex.LengthUnit(o.per_length, o.per_length_qty).label} "
                            f"({o.per_length_text}) - compared per foot.")
     _split_length_basis(offers)
+    _split_pack_basis(offers)
+
+
+def _split_pack_basis(offers: list[Offer]) -> None:
+    """When two or more comparable listings state their pack size, a listing that doesn't can't be compared
+    with them: a "box of 100" at $5 and an unstated pack at $4.99 aren't the same thing. It is set aside with a
+    reason rather than counted as one unit."""
+    pool = [o for o in offers if o.comparable and not o.per_length]
+    stated = [o for o in pool if o.pack_qty]
+    if len(stated) < 2:
+        return
+    for o in pool:
+        if not o.pack_qty:
+            o.exclusion_reasons.append("doesn't state how many are in it, while other listings do - check the pack "
+                                       "size to compare")
+            o.comparable = False
 
 
 def _split_length_basis(offers: list[Offer]) -> None:
@@ -275,18 +299,20 @@ def _cmp_value(o: Offer) -> float | None:
 
 
 def _comparison_basis(pool: list[Offer]) -> tuple[str, bool, list[Offer]]:
-    """(basis label, per-unit?, listings counted as single units). Pure - no side effects.
+    """(basis label, per-unit?, listings counted as single units - always empty now). Pure - no side effects.
 
-    Listing price when pack sizes agree. Per-unit price only when at least two listings state a
-    pack size; then listings without one are counted as single units (and flagged)."""
+    Listing price when pack sizes agree (or only one listing states one). Per-unit price when two or more
+    comparable listings state different pack sizes; listings that state none were already set aside by
+    assess_comparability (_split_pack_basis)."""
     if pool and all(o.per_length in ("ft", "m") for o in pool):
         return "price per foot (CAD)", False, []
-    qtys = {o.pack_qty for o in pool}
     stated = [o for o in pool if o.pack_qty]
-    if len(qtys) <= 1 or len(stated) < 2:
+    qtys = {o.pack_qty for o in stated}
+    if len(stated) >= 2 and len(qtys) == 1 and len(stated) == len(pool):
+        return f"listing price (CAD), packs of {qtys.pop()}", False, []
+    if len(stated) < 2 or len({o.pack_qty for o in pool}) <= 1:
         return "listing price (CAD)", False, []
-    return ("price per unit (CAD; listings without a stated pack size counted as single units)", True,
-            [o for o in pool if not o.pack_qty])
+    return "price per unit (CAD)", True, []
 
 
 def set_compare_values(offers: list[Offer]) -> None:

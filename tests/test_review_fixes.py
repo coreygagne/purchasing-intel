@@ -126,12 +126,20 @@ def test_mixed_pack_sizes_do_not_drop_single_listings():
     set_compare_values(offers)
     rec = recommend(offers, ["X-1000"])
     assert rec["lowest"]["offer_id"] == "1" and rec["pool_size"] == 3 and rec["basis"] == "listing price (CAD)"
-    # two listings state pack sizes: per-unit, singles counted as one unit and flagged
+    # two listings state pack sizes: per-unit; a listing that states none can't be compared and is set aside
+    # (live run, nitrile gloves: "$4.99" with no pack size had been counted as one glove against boxes of 100)
+    from app.analysis import _split_pack_basis
     offers = [mk("1", 100.0), mk("2", 250.0, pack=3), mk("3", 379.0, pack=5)]
+    _split_pack_basis(offers)
+    assert not offers[0].comparable and "how many are in it" in offers[0].exclusion_reasons[0]
+    pool = [o for o in offers if o.comparable]
+    set_compare_values(pool)
+    rec = recommend(pool, ["X-1000"])
+    assert rec["lowest"]["offer_id"] == "3" and rec["basis"] == "price per unit (CAD)" and rec["pool_size"] == 2
+    # the same pack size everywhere: compared by listing price, labelled with the pack
+    offers = [mk("1", 7.39, pack=100), mk("2", 5.00, pack=100)]
     set_compare_values(offers)
-    rec = recommend(offers, ["X-1000"])
-    assert rec["lowest"]["offer_id"] == "3" and "counted as single units" in rec["basis"]
-    assert any("counted as a single unit" in f for f in offers[0].flags)
+    assert recommend(offers, ["X-1000"])["basis"] == "listing price (CAD), packs of 100"
 
 
 # --- C4: several offers under one Product -> unclear, not ranked ------------------------------------

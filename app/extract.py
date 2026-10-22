@@ -208,6 +208,37 @@ CONDITION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
+# For vehicles, machinery, classifieds and auctions the condition is usually in the ad text, not the title:
+# "USED Hyster 5,000 lb", "2019 Used Crown", "Pre-Owned", an odometer reading or machine hours
+_USED_WORD = re.compile(r"\bpre-?owned\b|\bused\b(?!\s+(?:by|for|to|in|with|on|as|at|daily|everyday|once)\b)", re.I)
+_MILEAGE = re.compile(r"\b\d{1,3}(?:,\d{3})+\s?(?:km|kms|kilometres|kilometers|miles)\b|\b\d{4,7}\s?(?:km|kms)\b", re.I)
+_HOURS = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d{3,6})\s?(?:hours|hrs)\b(?!\s+(?:a|per)\s+(?:day|week))", re.I)
+
+
+def used_evidence(text: str, machinery: bool = False) -> str | None:
+    """The words in an ad that show it is used ("Used", "Pre-Owned", "161,420 km", "5806 Hours"), or None."""
+    for rx in (_USED_WORD, _MILEAGE) + ((_HOURS,) if machinery else ()):
+        m = rx.search(text or "")
+        if m:
+            return m.group(0)
+    return None
+
+
+_YEAR = re.compile(r"(?<![\w$.,/-])((?:19[89]|20[0-4])\d)(?![\w-]|[.,]\d|\s?(?:km|kms|miles|hours|hrs|lbs?|kg)\b)",
+                   re.I)
+
+
+def model_years(text: str) -> list[int]:
+    """Model years written in a vehicle or equipment title ("2019 Ford F-150", "Ford 2018 F-150 4x4")."""
+    return sorted({int(y) for y in _YEAR.findall(text or "")})
+
+
+def requested_model_year(text: str) -> int | None:
+    """The one model year a request names ("2019 Ford F-150 pickup"); None when it names none or several."""
+    years = model_years(text)
+    return years[0] if len(years) == 1 else None
+
+
 def detect_condition(text: str) -> str | None:
     for label, pat in CONDITION_PATTERNS:
         if pat.search(text):
@@ -302,6 +333,8 @@ def _to_float(s: str) -> float | None:
 
 
 _CONTINUES_RE = re.compile(r"^[.,]?\d")
+_BETWEEN_BEFORE = re.compile(r"\bbetween\s*$", re.I)
+_AND_HIGH = re.compile(r"\s+and\s+(?:CA\$|C\$|US\$|\$|€|£|¥)?\s?(?P<high>" + _AMOUNT + r")(?![\d.,]?\d)", re.I)
 
 
 def find_prices(text: str) -> list[PriceMatch]:
@@ -311,6 +344,8 @@ def find_prices(text: str) -> list[PriceMatch]:
         return out
     taken: list[tuple[int, int]] = []
     for m in PRICE_RE.finditer(text):
+        if any(s <= m.start() < e for s, e in taken):
+            continue  # the high end of a range already read
         before = text[max(0, m.start() - 25): m.start()]
         after = text[m.end(): m.end() + 25]
         if _NOISE_BEFORE.search(before) or _NOISE_AFTER.match(after):
@@ -333,6 +368,11 @@ def find_prices(text: str) -> list[PriceMatch]:
         if suffix:
             currency = "CNY" if suffix == "RMB" else suffix
         high = _to_float(m.group("high")) if m.group("high") and end == m.end() else None
+        if high is None and _BETWEEN_BEFORE.search(before):
+            # "value ranges between $13176 and $33686": a range, not a price
+            nxt = _AND_HIGH.match(text, end)
+            if nxt:
+                high, end = _to_float(nxt.group("high")), nxt.end()
         if high is not None and high <= amount:
             high = None
         out.append(PriceMatch(amount, currency, m.group("prefix").strip(), text[m.start():end].strip(), high,
@@ -419,6 +459,8 @@ PACK_PATTERNS = [
     re.compile(r"\b(?:pack|box|case|bag|carton|bundle|set|lot|pail|tub|roll)\s+of\s+(\d{1,5})\b", re.I),
     re.compile(r"\b(\d{1,5})\s?(?:-|\s)?(?:pack|pk|pkg|pcs|pieces|count|ct|per box|per case|/box|/case|/pk|/pack|/bag)\b", re.I),
     re.compile(r"\((\d{1,5})\s?(?:pk|pack|pcs|ct|count)\)", re.I),
+    # "100 Gloves/Box", "Extra Large100/bx", "12/cs", "200 pcs/case"
+    re.compile(r"(?<!\d)(\d{1,5})\s?(?:[a-z]+\s?)?/\s?(?:box|bx|cs|case|ctn|carton|pk|pack|bag|bg)\b", re.I),
     re.compile(r"\bqty[:\s]+(\d{1,5})\b", re.I),
 ]
 

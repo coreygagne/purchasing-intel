@@ -732,6 +732,24 @@ def _page_details(s: Source, html: str, fetched_at: str) -> None:
     s.badges = list(dict.fromkeys(s.badges + ex.badges(f"{s.title}. {(s.page_text or '')[:3000]}")))[:3]
 
 
+_AD_TYPES = {"classifieds / used", "auction / surplus"}
+
+
+def _condition_from_ad_text(offers: list[Offer], category: str) -> None:
+    """Vehicles, machinery, classifieds and auctions: read 'used' from the ad's own words near the price
+    (title and quoted text), with a note saying which words. Other listings keep the title-only rule, since
+    shop pages say things like 'used by professionals'."""
+    for o in offers:
+        if o.condition or not (category in ("vehicle", "machinery") or o.supplier_type in _AD_TYPES):
+            continue
+        words = ex.used_evidence(f"{o.product_title} {o.evidence_quote or ''}", machinery=category == "machinery")
+        if words:
+            o.condition = "used"
+            note = f"Condition read from the listing text ('{words}')."
+            if note not in o.notes:
+                o.notes.append(note)
+
+
 def dedupe_snippet_offers(offers: list[Offer], structured_source_ids: set[str]) -> None:
     """Drop snippet offers that merely repeat a page-data price for the same source.
 
@@ -770,11 +788,21 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         specs, length = identity.get("specs") or [], identity.get("order_length") or None
     else:  # saved before spec checks existed
         specs, length = ex.request_specs(identity.get("name", ""))
+    for o in offers:
+        if not o.pack_qty:  # re-read from the title under the current rules ("100 Gloves/Box", "100/bx")
+            pack = ex.pack_quantity(o.product_title)
+            if pack:
+                o.pack_qty, o.pack_text = pack
+    category = (meta.get("plan") or {}).get("category") or disc.categorize(identity.get("name", ""),
+                                                                           identity.get("category")).key
+    _condition_from_ad_text(offers, category)
+    wanted = ex.detect_condition(identity.get("name", "")) or (
+        "used" if ex.used_evidence(identity.get("name", "")) else None)
     apply_match(offers, tokens, by_id, specs, length)
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity, order_length=length,
-                            badges_by_source={s.id: s.badges for s in sources if s.badges})
+                            badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
     an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
@@ -787,9 +815,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
                                home_city=disc.HOME["city"], quantity=quantity, item=identity.get("name", ""),
                                tokens=tokens)
-    market = mk.market_value(offers, tokens, length)
-    category = (meta.get("plan") or {}).get("category") or disc.categorize(identity.get("name", ""),
-                                                                           identity.get("category")).key
+    market = mk.market_value(offers, tokens, length, category)
     fx_public = {cur: asdict(r) for cur, r in fx.items() if cur != "CAD"}
     checklist = import_checklist([asdict(o) for o in offers], fx_public, clean, category)
     compliance = COMPLIANCE.get(category, COMPLIANCE["general"])
