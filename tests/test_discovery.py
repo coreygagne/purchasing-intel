@@ -581,3 +581,30 @@ def test_listing_with_every_spec_is_an_equivalent_when_a_part_number_was_given()
     assert any("Equivalent by specs" in f for f in equiv.flags)
     rec = recommend([equiv, other], tokens, specs=specs)
     assert rec["lowest"]["supplier"] == "S1" and any("No priced listing names part TK500-03" in n for n in rec["notes"])
+
+
+def test_quote_requests_go_to_suppliers_listing_the_item_then_local_supply_houses():
+    from app.evidence import apply_match
+    from app.picks import _needed
+    from app.vendors import build_vendors
+    specs, length = ex.request_specs("TK500-03 3C 500MCM COPPER TECK CABLE 1000V")
+    listing = _offer(1, None, product_title="TECK 3 C 500 MCM CU PVC-JKT 1000V | Teck Cable", price_type="quote_required",
+                     price_basis="none", supplier="Westburne Electric Supply", supplier_domain="westburne.ca",
+                     supplier_type="industrial distributor", price_cad=None)
+    apply_match([listing], ["TK500-03"], {}, specs, length)
+    assert listing.match_level == "equivalent" and listing.spec_confirmed == ["500 kcmil", "3-conductor", "copper", "1000 V"]
+    maps = [{"name": n, "address": f"{i} Main St, Thunder Bay, ON P7B 1A{i}", "phone": f"(807) 555-01{i}{i}",
+             "website": None, "category": c, "rating": None, "reviews": None, "listing_url": None,
+             "retrieved_at": "2026-10-22T00:00:00+00:00"}
+            for i, (n, c) in enumerate([("Benka Electric", "Electrician"), ("Anixter", "Electrical supply store"),
+                                        ("Westburne Electric Supply", "Wholesaler")], start=1)]
+    from app.evidence import build_sources
+    vendors = build_vendors(build_sources([], []), [listing], maps, item="TK500-03 3C 500MCM COPPER TECK CABLE 1000V",
+                            tokens=["TK500-03"])
+    by = {v["name"]: v for v in vendors}
+    assert by["Benka Electric"]["business_kind"] == "service" and not by["Benka Electric"]["quote_opportunity"]
+    assert [v["name"] for v in vendors][:2] == ["Westburne Electric Supply", "Anixter"]
+    needed = _needed({}, None, None, vendors, {}, None)
+    assert needed[0].startswith("Best first call: Westburne Electric Supply (Thunder Bay) lists this item")
+    assert "call (807) 555-0133" in needed[0]
+    assert "Westburne Electric Supply, Anixter" in needed[1] and "Benka" not in needed[1]

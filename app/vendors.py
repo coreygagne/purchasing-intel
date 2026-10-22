@@ -34,6 +34,12 @@ _NOT_A_SELLER = re.compile(r"\b(electricity|utility|utilities|power outages?|out
                            r"university|college|association|chamber of commerce|view member|member directory|"
                            r"careers?|job openings?|jobs at)\b", re.I)
 
+# Google Maps categories: businesses that sell supplies vs contractors and services
+_SELLER_CATEGORY = re.compile(r"\b(suppl(?:y|ier|ies)|wholesal\w*|distribut\w*|store|shop|dealer|outlet|hardware|"
+                              r"warehouse|depot|retail\w*|rental)\b", re.I)
+_SERVICE_CATEGORY = re.compile(r"\b(electrician|contractor|installer|installation|repair|service|engineer\w*|"
+                               r"consultant|plumber|construction company|builder|mechanic)\b", re.I)
+
 # directory and social pages about one business (not search-results pages or feeds listing many)
 _DIRECTORY_BUSINESS = re.compile(
     r"yellowpages\.ca/bus/|canada411\.ca/business/|yelp\.(?:ca|com)/biz/|"
@@ -286,8 +292,10 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
 
     out = [_record(v, quantity) for v in vendors.values()]
     out = [r for r in out if r]
+    # local first; then what they showed for this item; supply houses before contractors and services
     out.sort(key=lambda r: (TIERS.index(r["tier"]) if r["tier"] in TIERS else 9,
                             {"published": 0, "quote_required": 1, "no_price_seen": 2}[r["price_status"]],
+                            {"seller": 0, None: 1, "service": 2}[r["business_kind"]],
                             r["name"].lower()))
     for i, r in enumerate(out, start=1):
         r["id"] = f"V{i}"
@@ -322,17 +330,27 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
                   "price_label": best.price_label, "price_kind": best.price_kind, "comparable": best in comparable,
                   "observed_at": best.observed_at, "url": best.url}
     sells_trade = v.type in TRADE_TYPES or bool(v.trade)
+    # what kind of business a map listing says it is: a supply house, or a contractor or service that may
+    # install the item but isn't usually where to buy it
+    kind = None
+    if v.category:
+        if _SERVICE_CATEGORY.search(v.category) and not _SELLER_CATEGORY.search(v.category):
+            kind = "service"
+        elif _SELLER_CATEGORY.search(v.category):
+            kind = "seller"
     reasons = []
-    if status == "quote_required":
+    if kind == "service" and not v.offers:
+        reasons = []  # a contractor with no listing for the item: shown for reference, not a quote target
+    elif status == "quote_required":
         reasons.append("they show 'request a quote' for this item")
     elif status == "no_price_seen" and v.type not in (MARKETPLACE, BUSINESS_DIRECTORY, AUCTION, PROPERTY_SITE):
         reasons.append("only sold or bid prices were seen" if other else "no published price for this item was found")
     if sells_trade and status == "published" and (quantity or 0) >= 2:
         reasons.append(f"trade or volume pricing at {quantity} units may beat the published price")
-    if v.tier == "local" and status != "quote_required" and not reasons:
+    if v.tier == "local" and status != "quote_required" and not reasons and kind != "service":
         reasons.append("local supplier: ask for their price and stock")
     products = list(dict.fromkeys(o.product_title for o in v.offers if o.product_title))[:3]
-    if not (v.offers or v.source_ids or v.map_listing):
+    if not (v.offers or v.source_ids or v.map_listing or v.category or v.address):
         return None
     address = dict(v.address) if v.address else None
     if address:
@@ -352,6 +370,9 @@ def _record(v: _Vendor, quantity: int | None) -> dict[str, Any] | None:
         "trade_signals": _dedupe_trade(v.trade)[:4], "sells_trade": sells_trade,
         "quote_opportunity": bool(reasons), "quote_reasons": reasons,
         "rating": v.rating, "badges": v.badges, "map_listing": v.map_listing, "map_category": v.category,
+        "business_kind": kind,
+        "lists_item": any(o.match_level in ("exact", "equivalent", "unverified") and not o.spec_conflicts
+                          for o in v.offers),
         "source_ids": v.source_ids[:10], "first_seen": min((s for s in v.seen if s), default=None),
     }
 

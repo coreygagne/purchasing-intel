@@ -717,7 +717,8 @@ function suppliersTab(res) {
         h("h3", {}, v.website ? link(v.website, v.name) : v.name),
         h("span", { class: `badge ${v.tier === "local" ? "exact" : ""}`, title: v.tier_basis || "" }, v.tier_label),
         h("span", { class: `badge ${v.price_status === "published" ? "" : "warn"}` }, STATUS[v.price_status]),
-        v.sells_trade ? h("span", { class: "badge" }, "Trade / volume") : null),
+        v.sells_trade ? h("span", { class: "badge" }, "Trade / volume") : null,
+        v.business_kind === "service" ? h("span", { class: "badge", title: "Google Maps lists it as a contractor or service, not a supplier" }, "Contractor / service") : null),
       h("div", { class: "sub" }, [v.type !== "unknown" ? v.type : null, v.map_category].filter(Boolean).join(", ") || "business type not stated",
         v.tier_basis ? ` · location: ${v.tier_basis}` : ""),
       h("div", { class: "vgrid" },
@@ -739,7 +740,10 @@ function suppliersTab(res) {
           v.badges.length ? h("div", { class: "small muted" }, `Marketplace badge: ${v.badges.join(", ")} (the marketplace's own label, not proof of quality or seller identity)`) : null),
         h("div", {},
           h("h4", {}, "Ask for a quote"),
-          v.quote_opportunity ? h("p", { class: "small", style: "margin:0 0 6px" }, `Why: ${v.quote_reasons.join("; ")}.`) : h("p", { class: "empty", style: "margin:0" }, "Published price available."),
+          v.quote_opportunity ? h("p", { class: "small", style: "margin:0 0 6px" }, `Why: ${v.quote_reasons.join("; ")}.`)
+            : h("p", { class: "empty", style: "margin:0" }, v.business_kind === "service"
+              ? "A contractor or service, not a supplier: listed for reference. For the material alone, supply houses are usually cheaper."
+              : "Published price available."),
           drafts[v.id] ? rfqBox(drafts[v.id]) : null))))
       : h("p", { class: "empty" }, "No suppliers were identified."));
 }

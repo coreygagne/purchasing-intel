@@ -864,7 +864,7 @@ _SIZE_RANGE = re.compile(r"(?:from\s+)?#?\s?\d[\d/]*\s*(?:awg|kcmil|mcm)?\s+(?:t
                          r"(?:awg|kcmil|mcm)\b", re.I)
 _CORD = re.compile(r"(?<![\d/.])\b(18|16|14|12|10|8|6)\s*/\s*([2-5])\b(?!\s*(?:in|inch|\"|mm))", re.I)
 _MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:mm2|mm²|sq\.?\s*mm)\b", re.I)
-_CONDUCTORS = re.compile(r"\b(\d{1,2})\s*-?\s*(?:conductors?\b|cond\b\.?)|\b(\d{1,2})(?:-|/)?c\b|"
+_CONDUCTORS = re.compile(r"\b(\d{1,2})\s*-?\s*(?:conductors?\b|cond\b\.?)|\b(\d{1,2})(?:-|/|\s)?c\b(?![-.\w°])|"
                          r"\b(single|two|three|four|five|six)[\s-]+conductors?\b", re.I)
 _WORD_NUM = {"single": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 _COPPER = re.compile(r"\b(?:copper|cu)\b", re.I)

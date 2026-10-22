@@ -177,7 +177,21 @@ def _needed(rec: dict[str, Any], lowest: Offer | None, best: Offer | None, vendo
             rows: dict[str, dict[str, Any]], order_length: dict[str, Any] | None) -> list[str]:
     out = []
     if lowest is None:
-        targets = [v["name"] for v in vendors if v["quote_opportunity"]][:4]
+        # suppliers that list this item first (they quote on request), then local supply houses, then the rest
+        ranked = sorted((v for v in vendors if v["quote_opportunity"]),
+                        key=lambda v: (not v.get("lists_item"), v["tier"] != "local",
+                                       v.get("business_kind") != "seller"))
+        targets = [v["name"] for v in ranked][:4]
+        first = next((v for v in ranked if v.get("lists_item") and v["tier"] == "local"), None) or \
+            next((v for v in ranked if v.get("lists_item")), None)
+        if first:
+            phone = first["phones"][0]["value"] if first["phones"] else None
+            email = first["emails"][0]["value"] if first["emails"] else None
+            how = f" - call {phone}" if phone else (f" - email {email}" if email else "")
+            out.append(f"Best first call: {first['name']} ({first['tier_label']}) lists this item"
+                       + (f" (\"{first['products'][0]}\")" if first["products"] else "")
+                       + f" and {'quotes on request' if first['price_status'] == 'quote_required' else 'shows no price'}"
+                       f"{how}.")
         out.append("Not enough price evidence to recommend a supplier. Request quotes" +
                    (f" from {', '.join(targets)}" if targets else "") + " (drafts in the Suppliers tab).")
     for o in [x for x in (lowest, best) if x is not None]:
