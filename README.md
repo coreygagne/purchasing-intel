@@ -443,6 +443,14 @@ aren't. The changes:
   (each model asked for, used-vehicle sites, dealers and fleet pricing, auctions) instead of wholesale and
   manufacturer searches, which found parts shops. Parts and accessories (lift kits, bumpers) and other models
   are left off the list.
+- **Toys and accessories** (diecast and scale models, truck caps, shocks) are kept out of vehicle results, and
+  Google Shopping isn't searched for vehicles or property (it returns toys and accessories for them). Used
+  single listings now appear in vehicle lists even when the request doesn't say "used".
+- **Filters:** a Filters panel next to the search options: price range (a two-handle slider plus exact
+  amounts, CAD), and for vehicles and equipment the model year range, maximum km (or miles) and maximum hours.
+  They can be changed on a result without searching again (no credits). A listing outside a filter is left
+  out; one that doesn't state the year, km or hours stays in, marked "not stated". Search snippets often don't
+  state km or hours, so those two filters catch some listings, not all.
 - **Where to look:** "In Thunder Bay" and "Outside Thunder Bay" toggles next to the search (both on by
   default). Thunder Bay only runs the local searches and compares only sellers placed in Thunder Bay; outside
   only skips them.

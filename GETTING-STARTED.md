@@ -125,6 +125,10 @@ Lens** opens Lens if you'd rather search visually.
 Next to Quick / Standard / Deep, **In Thunder Bay** and **Outside Thunder Bay** choose where to look. Both are on
 by default; turn one off to search only in town or only outside it.
 
+**Filters** (next to Quantity) sets a price range with a slider, and for vehicles and equipment a year range,
+maximum km and maximum hours. On a result, change them and click **Apply to this result**: no new search, no
+cost. Listings that don't state the year, km or hours stay in and say "not stated".
+
 Links with a small frame mark show the listing's picture when you point at them, so you don't have to open each
 one (on a computer; phones have no hover).
 

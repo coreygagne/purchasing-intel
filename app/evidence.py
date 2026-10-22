@@ -124,6 +124,8 @@ class Offer:
     page_kind: str | None = None
     page_kind_note: str | None = None
     image: str | None = None  # picture from the listing's page or Google Shopping, for a preview
+    # what a single vehicle or equipment listing states, for the filters: {"year": 2019, "km": 120000, "hours": ...}
+    facts: dict[str, Any] = field(default_factory=dict)
     # requested specs (plain-language requests) this listing's own text confirms / doesn't state / contradicts
     spec_confirmed: list[str] = field(default_factory=list)
     spec_missing: list[str] = field(default_factory=list)
@@ -527,7 +529,8 @@ def is_search_results_url(url: str) -> bool:
 _MANY_TITLE = re.compile(r"^\W*\d[\d,]*\+?\s+(?:ads?|results?|listings?|items?|products?|matches)\b|"
                          r"\bmore than \d[\d,]*\+?\s+(?:in|results?|listings?|ads?|items?|products?)\b|"
                          r"\b\d[\d,]*\+?\s+(?:listings|results|ads)\b|^\(\d[\d,]*\)\s|"
-                         r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d|\bpage \d+ of \d+\b|\barchives\b", re.I)
+                         r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d|\bpage \d+ of \d+\b|\barchives\b|"
+                         r"^\W*\d[\d,]*\+?\s+(?:new |used )?[\w\- ]{0,40}\b(?:cars|trucks|vehicles|units)\b", re.I)
 # "2019 Ford F-150 for Sale in Ontario", "Used Forklifts For Sale | Crown": an inventory or category page unless
 # its address names one listing ("/listing/for-sale/236473081/...", "...-id14472759.html")
 _FOR_SALE_MANY = re.compile(r"\bfor (?:sale|rent|lease|auction)\b(?:\s+(?:in|near|nationwide|across|around|under)\b|"

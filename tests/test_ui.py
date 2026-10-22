@@ -231,3 +231,29 @@ def test_hovering_a_listing_link_shows_its_picture(servers, browser, tmp_path):
     page.mouse.move(5, 5)
     page.wait_for_selector(".peek", state="hidden")
     page.close()
+
+
+def test_filters_panel_slider_and_apply_to_result(servers, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(servers["ready"] + "/#/c/1")
+    page.wait_for_selector(".lead")
+    page.click("#filters-btn")
+    assert page.is_visible("#filters") and page.is_visible("#filters-apply")
+    page.fill("#price-max", "300")
+    assert int(page.input_value("#price-hi")) < 1000  # the slider follows the box
+    page.eval_on_selector("#price-lo", "(el) => { el.value = 100; el.dispatchEvent(new Event('input')); }")
+    assert page.input_value("#price-min") != ""  # and the box follows the slider
+    page.fill("#price-min", "")
+    assert "Filters (1)" in page.inner_text("#filters-btn")
+    with page.expect_response(lambda r: "/filters" in r.url and r.request.method == "PUT") as resp:
+        page.click("#filters-apply")
+    assert resp.value.ok
+    page.wait_for_selector("text=Filters:")
+    assert "up to CAD 300.00" in page.inner_text(".result-head")
+    page.click("#filters-clear")
+    page.click("#filters-apply")
+    page.wait_for_selector("text=Filter these results")
+    assert errors == []
+    page.close()

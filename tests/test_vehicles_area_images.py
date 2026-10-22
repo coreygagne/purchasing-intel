@@ -107,3 +107,65 @@ def test_listing_picture_reaches_the_offer():
                   fx={}, assumptions={}, home_province="ON",
                   meta={"query": "x", "researched_at": "2026-10-22T12:00:00+00:00", "plan": {"category": "tools"}})
     assert res["offers"][0]["image"] == "https://s1.example/p.jpg"
+
+
+def test_toy_trucks_are_not_trucks():
+    assert ex.vehicle_toy("Greenlight Hollywood Yellowstone 1978 Ford F-250 Chase 1:64 Diecast")
+    assert ex.vehicle_toy("Matchbox 2017 Ford F-350 SKYJACKER")
+    assert ex.vehicle_toy("Ford F-250 Super Duty XL 8 ft box") is None
+    assert ex.vehicle_toy("2019 Toyota Tacoma") is None  # "Toyota" isn't "toy"
+    assert ex.vehicle_part("Ford F-250/F-350 Adventure Edition Aluminum Truck Cap")
+    res = _run("f250 or f350 truck", [_offer(1, 182.4, "Greenlight BIGFOOT 1:18 Scale 1974 Ford F-250 Diecast"),
+                                       _offer(2, 15995.0, "Ford F-250 Super Duty XL 8 ft box", supplier_type="unknown")],
+               "vehicle")
+    assert {p["offer_id"] for p in res["recommendation"]["listing_pages"]} == {"O2"}
+
+
+def test_odometer_and_hours_are_read():
+    assert ex.odometer_km("2019 F-150, 161,420 km, one owner") == 161420
+    assert ex.odometer_km("98,000 miles") == round(98000 * 1.609344)
+    assert ex.machine_hours("Toyota 8FBCU25 5806 Hours") == 5806
+    assert ex.odometer_km("8 ft box") is None
+
+
+def _filtered(filters, offers, category="vehicle", name="f250 or f350 truck"):
+    from app.research import analyze
+    return analyze(identity={"name": name, "input_type": "text", "model_tokens": ex.model_tokens(name)}, sources=[],
+                   offers=offers, fx={}, assumptions={}, home_province="ON",
+                   meta={"query": name, "researched_at": "2026-10-22T12:00:00+00:00", "filters": filters,
+                         "plan": {"category": category}})
+
+
+def test_filters_leave_out_what_is_stated_outside_and_mark_what_is_not_stated():
+    offers = [_offer(1, 15995.0, "2012 Ford F-250 Super Duty XL, 240,000 km", supplier_type="unknown"),
+              _offer(2, 68800.0, "2024 Ford F-250 CREW CAB 4X4", supplier_type="unknown"),
+              _offer(3, 29999.0, "2019 Ford F-350 XLT, 98,000 km", supplier_type="unknown"),
+              _offer(4, 31000.0, "Ford F-350 Super Duty XLT", supplier_type="unknown")]
+    res = _filtered({"price_min": 10000, "price_max": 60000, "year_min": 2015, "km_max": 150000}, offers)
+    by = {o["id"]: o for o in res["offers"]}
+    assert any("year outside your filter" in r for r in by["O1"]["exclusion_reasons"])
+    assert any("price range" in r for r in by["O2"]["exclusion_reasons"])
+    assert by["O3"]["facts"] == {"year": 2019, "km": 98000}
+    assert by["O4"]["facts"]["not_stated"] == ["year", "kilometres"]
+    shown = {p["offer_id"] for p in res["recommendation"]["listing_pages"]}
+    assert shown == {"O3", "O4"}  # O4 stays in: it doesn't state the year or km
+
+
+def test_price_range_steers_the_recommendation():
+    offers = [_offer(i, p, "Acme TX-4400", supplier_type="retailer", price_basis="structured_data")
+              for i, p in ((1, 250.0), (2, 320.0), (3, 340.0))]
+    res = _filtered({"price_min": 300}, offers, category="tools", name="Acme TX-4400")
+    assert res["recommendations"]["lowest"]["offer_id"] == "O2"
+
+
+def test_filters_are_sent_saved_and_can_be_changed_without_searching(tmp_path):
+    with make_client(tmp_path) as c:
+        job = research(c, filters={"price_max": 300})
+        cid = job["comparison_id"]
+        res = c.get(f"/api/comparisons/{cid}").json()["result"]
+        assert res["filters"] == {"price_max": 300.0}
+        before = [r["id"] for r in c.get("/api/searches/recent").json()]
+        r = c.put(f"/api/comparisons/{cid}/filters", json={"price_min": 330})
+        assert r.status_code == 200 and r.json()["result"]["filters"] == {"price_min": 330.0}
+        assert [r["id"] for r in c.get("/api/searches/recent").json()] == before  # no new search was run
+        assert c.put(f"/api/comparisons/{cid}/filters", json={"year_min": 1500}).status_code == 422

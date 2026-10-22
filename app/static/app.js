@@ -224,6 +224,7 @@ window.addEventListener("hashchange", route);
 // ------------------------------------------------------------------ home
 async function renderHome() {
   document.body.classList.remove("compact");
+  $("#filters-apply").hidden = true;
   state.comparison = null;
   const view = $("#view");
   view.replaceChildren();
@@ -300,6 +301,82 @@ window.addEventListener("scroll", () => { if (!peek.hidden) hidePeek(); }, { pas
 
 // ------------------------------------------------------------------ search flow
 $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); startResearch(); });
+
+// ------------------------------------------------------------------ filters
+// Price uses a two-handle slider on a log scale ($10 to $1,000,000), so cheap and expensive items both get room; the
+// ends mean "any". The boxes show and take exact amounts.
+const P_MIN = 1, P_SPAN = 5, P_STEPS = 1000;
+const posToPrice = (pos) => { const v = 10 ** (P_MIN + (pos / P_STEPS) * P_SPAN); const m = 10 ** Math.floor(Math.log10(v) - 1); return Math.round(v / m) * m; };
+const priceToPos = (v) => Math.max(0, Math.min(P_STEPS, Math.round(((Math.log10(Math.max(v, 10)) - P_MIN) / P_SPAN) * P_STEPS)));
+function paintSlider() {
+  const lo = Number($("#price-lo").value), hi = Number($("#price-hi").value);
+  $("#price-slider").style.setProperty("--lo", `${(lo / P_STEPS) * 100}%`);
+  $("#price-slider").style.setProperty("--hi", `${(hi / P_STEPS) * 100}%`);
+}
+["#price-lo", "#price-hi"].forEach((sel) => $(sel).addEventListener("input", (e) => {
+  let lo = Number($("#price-lo").value), hi = Number($("#price-hi").value);
+  if (lo > hi) { if (e.target.id === "price-lo") hi = lo; else lo = hi; $("#price-lo").value = lo; $("#price-hi").value = hi; }
+  $("#price-min").value = lo > 0 ? posToPrice(lo) : "";
+  $("#price-max").value = hi < P_STEPS ? posToPrice(hi) : "";
+  paintSlider(); filtersChanged();
+}));
+["#price-min", "#price-max"].forEach((sel) => $(sel).addEventListener("input", () => {
+  const mn = $("#price-min").value, mx = $("#price-max").value;
+  $("#price-lo").value = mn === "" ? 0 : priceToPos(Number(mn));
+  $("#price-hi").value = mx === "" ? P_STEPS : priceToPos(Number(mx));
+  paintSlider(); filtersChanged();
+}));
+["#year-min", "#year-max", "#km-max", "#km-unit", "#hours-max"].forEach((sel) => $(sel).addEventListener("input", filtersChanged));
+$("#filters-btn").addEventListener("click", () => toggleFilters());
+$("#filters-clear").addEventListener("click", () => { setFilters({}); filtersChanged(); });
+$("#filters-apply").addEventListener("click", applyFiltersToResult);
+function toggleFilters(open) {
+  const panel = $("#filters"), show = open ?? panel.hidden;
+  panel.hidden = !show;
+  $("#filters-btn").setAttribute("aria-expanded", String(show));
+}
+function collectFilters() {
+  const num = (sel) => { const v = $(sel).value.trim(); return v === "" ? null : Number(v); };
+  const km = num("#km-max");
+  const f = { price_min: num("#price-min"), price_max: num("#price-max"), year_min: num("#year-min"),
+    year_max: num("#year-max"), km_max: km == null ? null : Math.round($("#km-unit").value === "mi" ? km * 1.609344 : km),
+    hours_max: num("#hours-max") };
+  return Object.fromEntries(Object.entries(f).filter(([, v]) => v != null && !Number.isNaN(v)));
+}
+function setFilters(f) {
+  $("#price-min").value = f.price_min ?? ""; $("#price-max").value = f.price_max ?? "";
+  $("#price-lo").value = f.price_min != null ? priceToPos(f.price_min) : 0;
+  $("#price-hi").value = f.price_max != null ? priceToPos(f.price_max) : P_STEPS;
+  $("#year-min").value = f.year_min ?? ""; $("#year-max").value = f.year_max ?? "";
+  $("#km-max").value = f.km_max ?? ""; $("#km-unit").value = "km"; $("#hours-max").value = f.hours_max ?? "";
+  paintSlider(); filtersChanged();
+}
+function filtersChanged() {
+  const n = Object.keys(collectFilters()).length;
+  $("#filters-btn").textContent = n ? `Filters (${n})` : "Filters";
+  $("#filters-btn").classList.toggle("on", n > 0);
+}
+function filtersText(f) {
+  if (!f) return "";
+  const parts = [];
+  const cad = (v) => money(v, "CAD");
+  if (f.price_min != null && f.price_max != null) parts.push(`${cad(f.price_min)} to ${cad(f.price_max)}`);
+  else if (f.price_min != null) parts.push(`from ${cad(f.price_min)}`);
+  else if (f.price_max != null) parts.push(`up to ${cad(f.price_max)}`);
+  if (f.year_min != null || f.year_max != null) parts.push(f.year_min != null && f.year_max != null ? `${f.year_min} to ${f.year_max}` : f.year_min != null ? `${f.year_min} or newer` : `${f.year_max} or older`);
+  if (f.km_max != null) parts.push(`up to ${Number(f.km_max).toLocaleString("en-CA")} km`);
+  if (f.hours_max != null) parts.push(`up to ${Number(f.hours_max).toLocaleString("en-CA")} hours`);
+  return parts.join("; ");
+}
+async function applyFiltersToResult() {
+  if (!state.comparison) return;
+  const btn = $("#filters-apply");
+  btn.disabled = true;
+  const r = await api(`/api/comparisons/${state.comparison.id}/filters`, { method: "PUT", body: JSON.stringify(collectFilters()) });
+  btn.disabled = false;
+  if (r.ok) { state.comparison = r.body; renderComparison(); }
+}
+paintSlider();
 
 // Where to look: Thunder Bay, outside it, or both. At least one stays on; the choice is remembered on this computer.
 function currentArea() {
@@ -395,7 +472,8 @@ async function startResearch(opts = {}) {
     }
   }
   const area = opts.area || currentArea();
-  const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty, area,
+  const filters = opts.filters || collectFilters();
+  const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty, area, filters,
     force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || null }) });
   if (r.status === 503) { flash(setupNotice(r.body?.setup)); return; }
   if (r.status === 402) {
@@ -519,9 +597,11 @@ async function openComparison(id) {
   state.entering = true;
   renderComparison();
   state.entering = false;
+  setFilters(r.body.result.filters || {});
 }
 
 function renderComparison() {
+  $("#filters-apply").hidden = false;
   const comp = state.comparison;
   const res = comp.result;
   const view = $("#view");
@@ -554,12 +634,15 @@ function header(comp, res) {
         id.input_type === "url" ? ["From your link, identified via ", id.source, ". "] : null,
         id.model_tokens?.length ? `Model number matched: ${id.model_tokens.join(", ")}. ` : "No model number given, so equivalence isn't verified. ",
         res.quantity ? `Quantity: ${res.quantity}. ` : "",
-        res.area === "local" ? "Searched in Thunder Bay only." : res.area === "outside" ? "Searched outside Thunder Bay only." : ""),
+        res.area === "local" ? "Searched in Thunder Bay only. " : res.area === "outside" ? "Searched outside Thunder Bay only. " : "",
+        filtersText(res.filters) ? [h("b", {}, "Filters: "), `${filtersText(res.filters)}. `] : null,
+        h("button", { class: "linkish", type: "button", onclick: () => { setFilters(res.filters || {}); toggleFilters(true); $("#filters").scrollIntoView({ block: "nearest" }); } },
+          filtersText(res.filters) ? "Change filters" : "Filter these results")),
       h("details", { class: "legend-box" }, h("summary", {}, "How to read the price marks"), legend())),
     h("div", { class: "actions" },
       saveBtn,
       h("button", { class: "btn", type: "button", title: "Runs a new search and adds new price observations (uses credits)",
-        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null, answers: res.answers || {}, area: res.area || "both" }) }, "Search again"),
+        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null, answers: res.answers || {}, area: res.area || "both", filters: res.filters || {} }) }, "Search again"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.csv` }, "Export CSV"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.xlsx` }, "Export Excel")));
 }
@@ -636,7 +719,7 @@ function leadCard(plain, res) {
       h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
       pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier, null, p.image), p.local ? " (Thunder Bay)" : "",
-        `: ${p.title}`, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
+        `: ${p.title}`, factsText(p.facts), p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
         h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
       h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
       h("div", { class: "next" }, h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")));
@@ -666,6 +749,16 @@ function leadCard(plain, res) {
       h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")),
     h("ul", { class: "why" }, plain.lead.why.map((w) => h("li", {}, w))),
     h("p", { class: "small muted", style: "margin:8px 0 0" }, plain.distinction));
+}
+
+// What a listing states for the filters ("2019, 120,000 km") and what it doesn't ("km not stated")
+function factsText(f) {
+  if (!f) return null;
+  const said = [f.year, f.km != null ? `${Number(f.km).toLocaleString("en-CA")} km` : null,
+    f.hours != null ? `${Number(f.hours).toLocaleString("en-CA")} hours` : null].filter(Boolean);
+  const missing = (f.not_stated || []).map((k) => `${k} not stated`);
+  if (!said.length && !missing.length) return null;
+  return [said.length ? ` (${said.join(", ")})` : "", missing.length ? h("span", { class: "muted" }, ` - ${missing.join(", ")}`) : null];
 }
 
 function telHref(phone) {

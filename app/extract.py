@@ -230,6 +230,24 @@ _MILEAGE = re.compile(r"\b\d{1,3}(?:,\d{3})+\s?(?:km|kms|kilometres|kilometers|m
 _HOURS = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d{3,6})\s?(?:hours|hrs)\b(?!\s+(?:a|per)\s+(?:day|week))", re.I)
 
 
+_ODOMETER = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d{1,7})\s?(km|kms|kilometres|kilometers|miles|mi)\b", re.I)
+
+
+def odometer_km(text: str) -> int | None:
+    """Kilometres a listing states ("161,420 km", "98,000 miles" -> km), or None."""
+    m = _ODOMETER.search(text or "")
+    if not m:
+        return None
+    n = int(m.group(1).replace(",", ""))
+    return round(n * 1.609344) if m.group(2).lower() in ("miles", "mi") else n
+
+
+def machine_hours(text: str) -> int | None:
+    """Engine or machine hours a listing states ("5806 Hours", "2,100 hrs"), or None."""
+    m = _HOURS.search(text or "")
+    return int(m.group(1).replace(",", "")) if m else None
+
+
 def used_evidence(text: str, machinery: bool = False) -> str | None:
     """The words in an ad that show it is used ("Used", "Pre-Owned", "161,420 km", "5806 Hours"), or None."""
     for rx in (_USED_WORD, _MILEAGE) + ((_HOURS,) if machinery else ()):
@@ -262,10 +280,21 @@ _VEHICLE_PART = re.compile(
     r"\bseat covers?\b|\bhitch(?:es)?\b|\bwheels?\b|\brims?\b|\btires?\b|\btyres?\b|\bexhaust\b|\btuners?\b|"
     r"\binjectors?\b|\bturbo(?:chargers?)?\b|\bfilters?\b|\bbrakes?\b|\brotors?\b|\bcalipers?\b|\bparts?\b|"
     r"\baccessor(?:y|ies)\b|\bgauges?\b|\bcluster\b|\bantennas?\b|\bdecals?\b|\bemblems?\b|\brunning boards?\b|"
-    r"\bnerf bars?\b|\bwinch(?:es)?\b|\bwipers?\b|\balternators?\b|\bradiators?\b|\btailgate\b|\bgaskets?\b", re.I)
+    r"\bnerf bars?\b|\bwinch(?:es)?\b|\bwipers?\b|\balternators?\b|\bradiators?\b|\btailgate\b|\bgaskets?\b|"
+    r"\btruck caps?\b|\bcanopy\b|\btoppers?\b|\bhydro\b|\bfrt\b|\bskyjacker\b|\brough country\b|\bbilstein\b", re.I)
+# toys and scale models of a vehicle: "Greenlight ... 1:64 Diecast", "Matchbox 2017 Ford F-350"
+_VEHICLE_TOY = re.compile(r"\bdie-?cast\b|\b1\s?:\s?\d{2,3}\b|\bscale model\b|\bmatchbox\b|\bhot wheels\b|\bgreenlight\b|"
+                          r"\btoys?\b|\breplica\b|\bmodel kit\b|\blego\b|\bremote control\b|\brc (?:car|truck)\b|"
+                          r"\bmaisto\b|\bbburago\b|\bjada\b|\bm2 machines\b|\bauto world\b|\bornament\b", re.I)
 # a whole vehicle's ad: starts with one model year, or states mileage, or says it's for sale
 _VEHICLE_AD = re.compile(r"^\W*(?:19|20)\d\d\b(?!\s*[-–/]\s*(?:19|20)?\d\d)|\b\d[\d,]*\s?(?:km|kms|miles)\b|"
                          r"\bfor sale\b|\b(?:crew|super) ?cab\b|\bsupercrew\b", re.I)
+
+
+def vehicle_toy(title: str) -> str | None:
+    """The words showing a listing is a toy or scale model of a vehicle ("1:64", "Diecast", "Matchbox"), or None."""
+    m = _VEHICLE_TOY.search(title or "")
+    return m.group(0) if m else None
 
 
 def vehicle_part(title: str) -> str | None:

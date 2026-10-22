@@ -34,6 +34,16 @@ log = logging.getLogger("purchasing")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+class Filters(BaseModel):
+    """Search filters; each is optional. Prices in CAD."""
+    price_min: float | None = Field(default=None, ge=0, le=100_000_000)
+    price_max: float | None = Field(default=None, ge=0, le=100_000_000)
+    year_min: int | None = Field(default=None, ge=1900, le=2100)
+    year_max: int | None = Field(default=None, ge=1900, le=2100)
+    km_max: int | None = Field(default=None, ge=0, le=10_000_000)
+    hours_max: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
 class ResearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=600)
     depth: str = "standard"
@@ -42,6 +52,7 @@ class ResearchBody(BaseModel):
     comparison_id: int | None = None
     # where to look: Thunder Bay only, outside Thunder Bay only, or both (the default)
     area: Literal["both", "local", "outside"] = "both"
+    filters: Filters | None = None
     # answers to the clarifying questions; None = skipped. Stored, and merged with earlier answers.
     answers: dict[str, str | int | float | bool | None] | None = None
 
@@ -302,7 +313,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                       comparison_id=body.comparison_id, used_ok=applied["used_ok"],
                                       answers=applied["answers"], assumptions=applied["assumptions"],
                                       spec_text=applied["spec_text"], length_text=applied["length_text"],
-                                      intended_use=applied["intended_use"], area=body.area)
+                                      intended_use=applied["intended_use"], area=body.area,
+                                      filters=body.filters.model_dump(exclude_none=True) if body.filters else {})
                 result = await asyncio.wait_for(engine.run(req, progress, meter), timeout=settings.job_timeout_s)
                 existing = db.get_comparison(body.comparison_id) if body.comparison_id else None
                 if existing and existing.get("assumptions"):
@@ -375,6 +387,18 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(404, "Comparison not found")
         result = reanalyze(comp["result"], body.assumptions, settings.home_province, body.quantity)
         db.update_comparison_meta(cid, assumptions=result["assumptions"], result=result)
+        return db.get_comparison(cid)
+
+    @app.put("/api/comparisons/{cid}/filters")
+    def put_filters(cid: int, body: Filters) -> dict[str, Any]:
+        """Apply new filters to a saved result (no new searching, no credits)."""
+        comp = db.get_comparison(cid)
+        if not comp:
+            raise HTTPException(404, "Comparison not found")
+        result = dict(comp["result"])
+        result["filters"] = body.model_dump(exclude_none=True)
+        result = reanalyze(result, comp.get("assumptions") or {}, settings.home_province)
+        db.update_comparison_meta(cid, result=result)
         return db.get_comparison(cid)
 
     @app.delete("/api/comparisons/{cid}")

@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 8
+ANALYSIS_VERSION = 9
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -104,6 +104,8 @@ class ResearchRequest:
     length_text: str | None = None  # a length to buy from the answers ("300 ft of")
     intended_use: str | None = None
     area: str = "both"  # where to look: "local" (Thunder Bay only), "outside" (not Thunder Bay) or "both"
+    # limits from the search filters: price_min/price_max (CAD), year_min/year_max, km_max, hours_max
+    filters: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -255,7 +257,9 @@ class ResearchEngine:
             hits, (listings, shopping_status), (local_businesses, local_status) = await _gather_or_raise(
                 self._search_all(providers, plan, cfg),
                 # Google Shopping lists national and online sellers: not part of a Thunder Bay-only search
-                self._shopping(providers, search_name) if req.area != "local" else _nothing(),
+                # and vehicles and property aren't sold there: it returns toys and accessories for them
+                self._shopping(providers, search_name)
+                if req.area != "local" and category.key not in ("vehicle", "property") else _nothing(),
                 self._local(providers, local_qs))
             all_hits = list(hits)
             all_plan = list(plan)
@@ -379,6 +383,7 @@ class ResearchEngine:
                 "answers": dict(req.answers),
                 "stated_assumptions": list(req.assumptions),  # for unanswered questions ("assumptions" = import inputs)
                 "area": req.area,
+                "filters": dict(req.filters),
                 "credits": credits,
                 "cost_estimate": {"usd": estimate_usd(credits), "prices_checked": PRICES_CHECKED,
                                   "note": "Anthropic charges estimated from reported usage at list prices"},
@@ -753,6 +758,47 @@ JUDGE_NOTE = ("Vehicles, equipment, property and used items aren't ranked by pri
               "call the local dealers below; the asking prices seen are under Market value.")
 
 
+FILTER_LABELS = {"year": "year", "km": "kilometres", "hours": "hours"}
+
+
+def _apply_filters(o: Offer, f: dict[str, float], category: str) -> None:
+    """Leave out listings that state something outside the search filters. A listing that doesn't state it stays
+    in, with what couldn't be checked noted in its facts; prices are compared in CAD."""
+    single = o.page_kind is None  # a page of many ads states many years and odometers: none of them is this one's
+    text = f"{o.product_title} {o.evidence_quote or ''}"
+    years = ex.model_years(o.product_title)
+    facts: dict[str, Any] = {}
+    if single and len(years) == 1:
+        facts["year"] = years[0]
+    if single and category in ("vehicle", "machinery"):
+        km, hours = ex.odometer_km(text), (ex.machine_hours(text) if category == "machinery" else None)
+        if km is not None:
+            facts["km"] = km
+        if hours is not None:
+            facts["hours"] = hours
+    unchecked = []
+    reasons = []
+    lo, hi = f.get("price_min"), f.get("price_max")
+    if (lo is not None or hi is not None) and o.price_cad is not None and o.price_type == "listed":
+        if (lo is not None and o.price_cad < lo) or (hi is not None and o.price_cad > hi):
+            reasons.append("outside your price range")
+    for key, lo_key, hi_key in (("year", "year_min", "year_max"), ("km", None, "km_max"), ("hours", None, "hours_max")):
+        lo_v, hi_v = f.get(lo_key) if lo_key else None, f.get(hi_key)
+        if lo_v is None and hi_v is None:
+            continue
+        v = facts.get(key)
+        if v is None:
+            unchecked.append(FILTER_LABELS[key])
+        elif (lo_v is not None and v < lo_v) or (hi_v is not None and v > hi_v):
+            reasons.append(f"{FILTER_LABELS[key]} outside your filter ({v:,})")
+    if unchecked:
+        facts["not_stated"] = unchecked
+    o.facts = facts
+    if reasons:
+        o.exclusion_reasons.extend(reasons)
+        o.comparable = False
+
+
 def _condition_from_ad_text(offers: list[Offer], category: str) -> None:
     """Vehicles, machinery, classifieds and auctions: read 'used' from the ad's own words near the price
     (title and quoted text), with a note saying which words. Other listings keep the title-only rule, since
@@ -834,16 +880,19 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     apply_match(offers, tokens, by_id, specs, length, category=category, any_of=ex.alternative_models(name, tokens))
     if category == "vehicle":
         for o in offers:
-            part = ex.vehicle_part(o.product_title)
-            if part and o.match_level != "different":
+            toy, part = ex.vehicle_toy(o.product_title), ex.vehicle_part(o.product_title)
+            if (toy or part) and o.match_level != "different":
                 o.match_level = "compatible"
-                o.match_notes = [f"Looks like a part or accessory ('{part}') for the vehicle, not the vehicle."]
+                o.match_notes = [f"Looks like a toy or scale model ('{toy}'), not the vehicle." if toy else
+                                 f"Looks like a part or accessory ('{part}') for the vehicle, not the vehicle."]
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity, order_length=length,
                             badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
     area = meta.get("area") or "both"
+    filters = {k: v for k, v in (meta.get("filters") or {}).items() if v is not None}
     for o in offers:
+        _apply_filters(o, filters, category)
         local = ((by_id.get(o.source_id or "") and by_id[o.source_id].location) or {}).get("tier") == "local"
         if area == "local" and not local:
             o.exclusion_reasons.append("not shown to be in Thunder Bay (you chose Thunder Bay only)")
@@ -964,7 +1013,7 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
     fx = {cur: FxRate(**r) for cur, r in (result.get("fx") or {}).items()}
     meta_keys = ["query", "depth", "quantity", "researched_at", "duration_s", "providers", "queries", "credits",
                  "cost_estimate", "fetch", "fx_errors", "plan", "local_businesses", "contact_pages", "answers",
-                 "stated_assumptions", "area"]
+                 "stated_assumptions", "area", "filters"]
     meta = {k: result.get(k) for k in meta_keys}
     if quantity is not None:
         meta["quantity"] = quantity or None

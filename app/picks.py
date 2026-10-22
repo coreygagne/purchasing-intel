@@ -8,13 +8,14 @@ observed.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .analysis import fmt_money
 from .evidence import Offer
 from .market import order_totals
-from .suppliers import (AUCTION, B2B_MARKETPLACE, CLASSIFIEDS, DISTRIBUTOR, MANUFACTURER, MARKETPLACE,
-                        is_non_commercial)
+from .suppliers import (AUCTION, B2B_MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, COMPLAINTS, DEALS,
+                        DISTRIBUTOR, FORUM, MANUFACTURER, MARKETPLACE, REVIEW, VIDEO, is_non_commercial)
 
 TRADE = {DISTRIBUTOR, MANUFACTURER, B2B_MARKETPLACE}
 PICK_LABELS = {"local": "Best local (Thunder Bay) option", "wholesale": "Best trade / wholesale option",
@@ -155,7 +156,7 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
             why.append("Risks: " + "; ".join(row["risks"]) + ".")
         lead = {"offer_id": best.id, "supplier": best.supplier, "url": best.url, "why": why}
 
-    pages = listing_pages(offers, vendor_of, options=bool(judge))
+    pages = listing_pages(offers, vendor_of, options=judge)
     needed = _needed(rec, lowest, best, vendors, rows, order_length, pages, judge)
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
             "judge": judge, "judge_note": rec["notes"][-1] if judge and rec.get("notes") else None,
@@ -194,15 +195,39 @@ def _advantages(best: Offer, other: Offer) -> list[str]:
 _AD_TYPES = {CLASSIFIEDS, AUCTION}
 
 
+def _filtered_out(o: Offer) -> bool:
+    """Left out by the search filters or the area chosen (Thunder Bay only, outside only)."""
+    return any(r.startswith("outside your price range") or "outside your filter" in r or "you chose" in r
+               for r in o.exclusion_reasons)
+
+
+NOT_SELLERS = {FORUM, REVIEW, VIDEO, COMPLAINTS, DEALS, BUSINESS_DIRECTORY}
+# articles on a seller's own site: "Why the 7.3-Liter V-8 Might Be the Smart Buy", "... Blog |"
+_EDITORIAL = re.compile(r"^\W*build an? \b|\bblog\b|\bwhy (?:the|you|we)\b|\bhow to\b|\breview\b|\bvs\.?\b|\bnews\b|\?$", re.I)
+_NOT_LISTABLE = ("consumer product", "doesn't name", "not a seller's page", "price guide", "completed sale")
+
+
+def _listable(o: Offer) -> bool:
+    """A listing a person can judge: about the item, and something on sale. Its condition (new or used), a
+    snippet-only price or a missing currency don't matter here; the person opening it sees those."""
+    if o.price is None or o.price_type != "listed" or o.supplier_type in NOT_SELLERS:
+        return False  # a blog post, forum thread or review that mentions a price isn't a listing
+    if _EDITORIAL.search(o.product_title or ""):
+        return False
+    return not any(any(w in r for w in _NOT_LISTABLE) for r in o.exclusion_reasons)
+
+
 def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
-                  options: bool = False) -> list[dict[str, Any]]:
-    """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads; with
-    `options`, also every listing that passed the comparison checks. Local first."""
+                  options: str | None = None) -> list[dict[str, Any]]:
+    """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads. With
+    `options` "shortlist", also each listing that passed the comparison checks; with "listings" (vehicles,
+    equipment, property, used), each single listing of the item on sale, new or used. Local first."""
     out, seen = [], set()
     pool = [o for o in offers if (o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)
-                                  or (options and o.comparable))
+                                  or (options == "shortlist" and o.comparable) or (options == "listings" and _listable(o)))
             # only pages about the item asked for: not another model, a part for it or a different variant
-            and o.match_level not in ("different", "compatible", "variant") and not o.spec_conflicts]
+            and o.match_level not in ("different", "compatible", "variant") and not o.spec_conflicts
+            and not _filtered_out(o)]
     # local first, then single listings with a price, then pages of many ads
     pool.sort(key=lambda o: ((vendor_of.get(o.id) or {}).get("tier") != "local", o.page_kind == "results",
                              o.price is None))
@@ -214,6 +239,7 @@ def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
         out.append({"offer_id": o.id, "supplier": o.supplier, "url": o.url, "title": o.product_title,
                     "price": o.price if asking else None, "currency": o.currency, "price_kind": o.price_kind,
                     "many": o.page_kind == "results", "observed_at": o.observed_at, "image": o.image,
+                    "facts": o.facts,
                     "local": (vendor_of.get(o.id) or {}).get("tier") == "local"})
     asked = sorted(p["price"] for p in out if p["price"] is not None and p["price_kind"] == "asking")
     if len(asked) >= 3:
