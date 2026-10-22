@@ -86,6 +86,7 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "walmart.ca": SupplierInfo("Walmart Canada", MARKETPLACE, "CA"),
     "ebay.ca": SupplierInfo("eBay Canada", MARKETPLACE, "CA"),
     "kijiji.ca": SupplierInfo("Kijiji", CLASSIFIEDS, "CA"),
+    "tbnewswatch.com": SupplierInfo("TBNewsWatch classifieds", CLASSIFIEDS, "CA"),
     "autotrader.ca": SupplierInfo("AutoTrader.ca", CLASSIFIEDS, "CA"),
     "carpages.ca": SupplierInfo("CarPages.ca", CLASSIFIEDS, "CA"),
     # Auctions, liquidation and government surplus

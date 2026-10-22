@@ -13,7 +13,8 @@ from typing import Any
 from .analysis import fmt_money
 from .evidence import Offer
 from .market import order_totals
-from .suppliers import B2B_MARKETPLACE, DISTRIBUTOR, MANUFACTURER
+from .suppliers import (AUCTION, B2B_MARKETPLACE, CLASSIFIEDS, DISTRIBUTOR, MANUFACTURER, MARKETPLACE,
+                        is_non_commercial)
 
 TRADE = {DISTRIBUTOR, MANUFACTURER, B2B_MARKETPLACE}
 PICK_LABELS = {"local": "Best local (Thunder Bay) option", "wholesale": "Best trade / wholesale option",
@@ -27,6 +28,8 @@ def _vendor_index(vendors: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def _same_item(o: Offer, tokens: list[str]) -> bool:
     if o.superseded() or o.spec_conflicts or o.price_cad is None or o.price_type != "listed":
         return False
+    if o.page_kind or is_non_commercial(o.supplier_domain):
+        return False  # a page listing many ads, a value estimate or a non-seller: nothing to buy there
     return o.match_level in ("exact", "equivalent") if tokens else o.match_level not in ("different", "compatible")
 
 
@@ -69,7 +72,10 @@ def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: i
 
 def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: dict[str, Any], tokens: list[str],
                       quantity: int | None, order_length: dict[str, Any] | None, home_province: str,
-                      used_ok: bool = True, assumptions: dict[str, float | None] | None = None) -> dict[str, Any]:
+                      used_ok: bool = True, assumptions: dict[str, float | None] | None = None,
+                      judge: bool = False) -> dict[str, Any]:
+    """`judge`: vehicles, equipment, property and used items - no ranking or picks; the listing pages and local
+    dealers are laid out for a person to judge."""
     by_id = {o.id: o for o in offers}
     vendor_of = _vendor_index(vendors)
     comparable = [o for o in offers if o.comparable and o.compare_value is not None
@@ -78,6 +84,8 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
     lowest = by_id.get((rec.get("lowest") or {}).get("offer_id", ""))
 
     picks: dict[str, Offer] = {}
+    if judge:
+        comparable, used_ok = [], False
     local = [o for o in comparable if (vendor_of.get(o.id) or {}).get("tier") == "local"]
     if local:
         picks["local"] = min(local, key=lambda o: o.compare_value)
@@ -88,8 +96,10 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
         used = [o for o in offers if _same_item(o, tokens) and o.compare_value is not None
                 and o.price_kind != "completed_sale"
                 and ((o.condition and o.condition != "new") or o.price_kind == "current_bid")]
-        if used:
-            picks["used"] = min(used, key=lambda o: o.compare_value)
+        fixed = [o for o in used if o.price_kind != "current_bid"]
+        if fixed or used:
+            # a fixed asking price before a bid in progress: an opening bid says little about the final price
+            picks["used"] = min(fixed or used, key=lambda o: o.compare_value)
     intl = [o for o in comparable if o.country != "CA"]
     if intl:
         picks["international"] = min(intl, key=lambda o: o.compare_value)
@@ -144,8 +154,11 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
             why.append("Risks: " + "; ".join(row["risks"]) + ".")
         lead = {"offer_id": best.id, "supplier": best.supplier, "url": best.url, "why": why}
 
-    needed = _needed(rec, lowest, best, vendors, rows, order_length)
+    pages = listing_pages(offers, vendor_of)
+    needed = _needed(rec, lowest, best, vendors, rows, order_length, pages, judge)
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
+            "judge": judge, "judge_note": rec["notes"][-1] if judge and rec.get("notes") else None,
+            "listing_pages": pages,
             "pick_notes": pick_notes, "missing_picks": missing, "needed": needed,
             "distinction": "Best overall value weighs price with evidence, supplier, domestic supply, delivery, "
                            "warranty and ratings; lowest comparable cost is the cheapest same-item price.",
@@ -177,9 +190,50 @@ def _advantages(best: Offer, other: Offer) -> list[str]:
     return out
 
 
+_AD_TYPES = {CLASSIFIEDS, AUCTION}
+
+
+def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads. Local first."""
+    out, seen = [], set()
+    pool = [o for o in offers if o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)]
+    pool.sort(key=lambda o: ((vendor_of.get(o.id) or {}).get("tier") != "local", o.price is None))
+    for o in pool:
+        if o.url in seen or o.superseded() or is_non_commercial(o.supplier_domain):
+            continue
+        seen.add(o.url)
+        asking = o.price_type == "listed" and o.price_kind != "completed_sale"
+        out.append({"offer_id": o.id, "supplier": o.supplier, "url": o.url, "title": o.product_title,
+                    "price": o.price if asking else None, "currency": o.currency, "price_kind": o.price_kind,
+                    "many": o.page_kind == "results", "observed_at": o.observed_at,
+                    "local": (vendor_of.get(o.id) or {}).get("tier") == "local"})
+    return out[:8]
+
+
 def _needed(rec: dict[str, Any], lowest: Offer | None, best: Offer | None, vendors: list[dict[str, Any]],
-            rows: dict[str, dict[str, Any]], order_length: dict[str, Any] | None) -> list[str]:
+            rows: dict[str, dict[str, Any]], order_length: dict[str, Any] | None,
+            pages: list[dict[str, Any]] | None = None, judge: bool = False) -> list[str]:
     out = []
+    pages = pages or []
+    if judge:
+        # local businesses, not the ad sites: those that list the item first, then those with a phone number
+        dealers = sorted((v for v in vendors if v["tier"] == "local" and v.get("business_kind") != "service"
+                          and v.get("type") not in (*_AD_TYPES, MARKETPLACE)),
+                         key=lambda v: (not v.get("lists_item"), not v["phones"]))[:4]
+        if pages:
+            out.append("Open these listing pages and compare individual ads (condition, hours or mileage, options, "
+                       "location): " + ", ".join(dict.fromkeys(p["supplier"] for p in pages)) + ".")
+        if dealers:
+            out.append("Call local dealers about what they have now: " + ", ".join(
+                v["name"] + (f" ({v['phones'][0]['value']})" if v["phones"] else "") for v in dealers) + ".")
+        out.append("Before buying: inspect it in person (or have a qualified inspector or mechanic do it), ask for "
+                   "service records, and check for liens or other claims (vehicles: a CARFAX report or Ontario's Used "
+                   "Vehicle Information Package).")
+        return list(dict.fromkeys(out))
+    if lowest is None and any(p["many"] and p["price"] is not None for p in pages):
+        out.append("Some prices were only seen on pages listing many products or ads (" + ", ".join(
+            dict.fromkeys(p["supplier"] for p in pages if p["many"])) + "): open them and check which listing a "
+            "price belongs to.")
     if lowest is None:
         # suppliers that list this item first (they quote on request), then local supply houses, then the rest
         ranked = sorted((v for v in vendors if v["quote_opportunity"]),

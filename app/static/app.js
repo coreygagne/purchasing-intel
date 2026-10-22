@@ -456,7 +456,7 @@ function keyFindings(res, offersById) {
   const opp = [...(plain?.needed || []), ...(res.opportunities || [])];
   return h("div", { class: "stack" },
     plain ? leadCard(plain, res) : null,
-    h("div", { class: "recs" }, recCard("lowest", rec.lowest, res, offersById), recCard("value", rec.best_value, res, offersById)),
+    plain?.judge ? null : h("div", { class: "recs" }, recCard("lowest", rec.lowest, res, offersById), recCard("value", rec.best_value, res, offersById)),
     plain && plain.comparison.length ? picksTable(plain) : null,
     res.market_value ? marketPanel(res.market_value) : null,
     h("div", { class: "grid-2" },
@@ -475,6 +475,16 @@ function keyFindings(res, offersById) {
 }
 
 function leadCard(plain, res) {
+  if (plain.judge) {
+    const pages = plain.listing_pages || [];
+    return h("section", { class: "lead none" }, h("div", { class: "kind" }, "For you to judge"),
+      h("div", { class: "head" }, "Listings to compare yourself - no price ranking"),
+      plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
+      pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier), p.local ? " (Thunder Bay)" : "",
+        `: ${p.title}`, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
+        h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
+      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))));
+  }
   if (!plain.lead) {
     return h("section", { class: "lead none" }, h("div", { class: "kind" }, "Recommendation"),
       h("div", { class: "head" }, "Not enough evidence to recommend a supplier yet"),
@@ -535,6 +545,8 @@ function marketPanel(mv) {
         h("td", { class: "r num" }, v(g.high)),
         h("td", { class: "small" }, g.first_seen === g.last_seen ? g.first_seen : `${g.first_seen} to ${g.last_seen}`),
         h("td", { class: "small" }, g.differences.join(" ") || "-")))))) : null,
+    (mv.valuations || []).length ? h("p", { class: "small" }, "Value estimates from price guides (not offers to sell): ",
+      mv.valuations.map((r, i) => [i ? "; " : "", link(r.url, r.supplier), ` ${money(r.low, r.currency)}${r.high != null ? `–${money(r.high, r.currency)}` : ""} (${day(r.observed_at)})`])) : null,
     (mv.indicative_ranges || []).length ? h("p", { class: "small" }, "Indicative ranges (not single prices): ",
       mv.indicative_ranges.map((r, i) => [i ? "; " : "", link(r.url, r.supplier), ` ${money(r.low, r.currency)}–${r.high ?? "?"}${r.moq ? ` (${r.moq})` : ""}`])) : null,
     h("p", { class: "small muted", style: "margin:8px 0 0" }, `Basis: ${mv.basis_label}. ${mv.method} `, mv.notes.join(" ")));

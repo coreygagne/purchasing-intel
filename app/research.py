@@ -733,6 +733,10 @@ def _page_details(s: Source, html: str, fetched_at: str) -> None:
 
 
 _AD_TYPES = {"classifieds / used", "auction / surplus"}
+JUDGED_CATEGORIES = {"vehicle", "machinery", "property"}
+JUDGE_NOTE = ("Vehicles, equipment, property and used items aren't ranked by price: listings differ in condition, "
+              "hours or mileage, options and location, which need a person's judgment. Open the listing pages and "
+              "call the local dealers below; the asking prices seen are under Market value.")
 
 
 def _condition_from_ad_text(offers: list[Offer], category: str) -> None:
@@ -796,9 +800,20 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     category = (meta.get("plan") or {}).get("category") or disc.categorize(identity.get("name", ""),
                                                                            identity.get("category")).key
     _condition_from_ad_text(offers, category)
-    wanted = ex.detect_condition(identity.get("name", "")) or (
-        "used" if ex.used_evidence(identity.get("name", "")) else None)
-    apply_match(offers, tokens, by_id, specs, length)
+    name = identity.get("name", "")
+    wanted = ex.detect_condition(name) or ("used" if ex.used_evidence(name) else None)
+    year = ex.requested_model_year(name) if category in ("vehicle", "machinery") else None
+    year_note = None
+    if year and not any(sp["dim"] == "model year" for sp in specs):
+        specs = specs + [{"dim": "model year", "value": str(year), "num": float(year), "label": f"model year {year}"}]
+        researched_year = int((meta.get("researched_at") or iso())[:4])
+        if not wanted and year <= researched_year - 2:
+            wanted = "used"
+            year_note = f"A {year} model is compared with used listings: in {researched_year} it is sold used."
+    # vehicles, equipment, property and used items: listings differ in condition, hours, mileage, options and
+    # location, so the app shows them for a person to judge instead of ranking prices
+    judge = category in JUDGED_CATEGORIES or wanted == "used"
+    apply_match(offers, tokens, by_id, specs, length, category=category)
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity, order_length=length,
@@ -807,6 +822,11 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
     rec = an.recommend(offers, tokens, specs=specs, order_length=length)
+    if judge:
+        rec = {"lowest": None, "best_value": None, "basis": rec.get("basis"), "pool_size": rec.get("pool_size", 0),
+               "notes": [JUDGE_NOTE]}
+    if year_note:
+        rec["notes"].insert(0, year_note)
     by_offer = {o.id: o for o in offers}
     for key in ("lowest", "best_value"):
         if rec.get(key):
@@ -820,7 +840,8 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     checklist = import_checklist([asdict(o) for o in offers], fx_public, clean, category)
     compliance = COMPLIANCE.get(category, COMPLIANCE["general"])
     used_ok = (meta.get("plan") or {}).get("used_ok", True)
-    plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok, clean)
+    plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok, clean,
+                                judge=judge)
     rfqs = rfq_drafts(vendors, identity, quantity, length, meta.get("answers"), compliance, category)
     cov = coverage_report(meta, sources, offers, vendors, market)
     quality = an.quality_evidence(sources, offers, tokens)

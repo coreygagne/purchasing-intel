@@ -85,7 +85,8 @@ def _value(o: Offer, basis: str) -> float | None:
 
 def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str, Any] | None = None,
                  category: str | None = None) -> dict[str, Any]:
-    eligible = [o for o in offers if o.price_cad is not None and o.price_type == "listed" and _same_item(o, tokens)]
+    eligible = [o for o in offers if o.price_cad is not None and o.price_type == "listed" and _same_item(o, tokens)
+                and o.page_kind != "valuation"]
     basis, basis_label = _basis(eligible, order_length)
     groups = []
     for key, label in GROUPS:
@@ -107,13 +108,17 @@ def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str,
             "observations": [{"offer_id": o.id, "supplier": o.supplier, "value": v, "price": o.price,
                               "currency": o.currency, "price_label": o.price_label, "confidence": o.confidence,
                               "observed_at": o.observed_at, "url": o.url, "country": o.country,
-                              "condition": o.condition} for o, v in sorted(used, key=lambda t: t[1])],
+                              "condition": o.condition, "many": o.page_kind == "results"}
+                             for o, v in sorted(used, key=lambda t: t[1])],
             "set_aside": [{"offer_id": o.id, "supplier": o.supplier, "price": o.price, "currency": o.currency,
                            "reason": "priced far below the other listings - likely a different size, variant or "
                                      "unit"} for o in aside],
             "differences": _differences([o for o, _ in used]),
         })
-    ranges = [o for o in offers if o.price_type == "range" and o.price is not None and _same_item(o, tokens)]
+    ranges = [o for o in offers if o.price_type == "range" and o.price is not None and _same_item(o, tokens)
+              and o.page_kind != "valuation"]
+    # price guides and value calculators: what a source estimates the item is worth, never an asking price
+    valuations = [o for o in offers if o.page_kind == "valuation" and o.price is not None and not o.superseded()]
     new = [g for g in groups if g["key"] in ("new_retail", "new_trade")]
     new_vals = sorted(ob["value"] for g in new for ob in g["observations"])
     overall = None
@@ -131,6 +136,10 @@ def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str,
     if not any(g["key"] == "completed_sales" for g in groups):
         notes.append("No completed-sale prices were found (sold prices are rarely published outside auctions and "
                      "marketplaces).")
+    many = sum(1 for g in groups for ob in g["observations"] if ob["many"])
+    if many:
+        notes.append(f"{many} observation(s) were seen on pages listing many ads or products: each is a real asking "
+                     "price, but which listing it belongs to isn't confirmed.")
     snippet_only = sum(1 for g in groups for ob in g["observations"] if ob["confidence"] == "low")
     if snippet_only:
         notes.append(f"{snippet_only} observation(s) come from search snippets or search-results pages (low "
@@ -139,6 +148,8 @@ def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str,
             "indicative_ranges": [{"offer_id": o.id, "supplier": o.supplier, "low": o.price, "high": o.price_high,
                                    "currency": o.currency, "url": o.url, "observed_at": o.observed_at,
                                    "moq": o.moq} for o in ranges][:8],
+            "valuations": [{"offer_id": o.id, "supplier": o.supplier, "low": o.price, "high": o.price_high,
+                            "currency": o.currency, "url": o.url, "observed_at": o.observed_at} for o in valuations][:6],
             "notes": notes,
             "method": "Calculated from the observations listed; low, median and high are of the values on the basis "
                       "shown. Asking prices, current bids and completed sales are never mixed."}

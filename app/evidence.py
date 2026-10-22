@@ -604,7 +604,8 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             titled = ex.match_offer(tokens, o.product_title)
             if titled.level == "variant":
                 m = titled
-        if tokens and m.level in ("different", "unverified") and specs and len(specs) >= 2 and \
+        if tokens and m.level in ("different", "unverified") and \
+                len([sp for sp in specs or [] if sp["dim"] != "model year"]) >= 2 and \
                 not o.spec_conflicts and not o.spec_missing:
             # a part number plus full specs ("TK500-03 3C 500MCM copper teck 1000V"): another maker's listing that
             # states every requested spec is an equivalent product, not the same part
