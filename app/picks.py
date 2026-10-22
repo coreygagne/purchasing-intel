@@ -59,6 +59,7 @@ def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: i
         "evidence": o.price_label, "confidence": o.confidence, "observed_at": o.observed_at,
         "delivery": o.shipping_text or "not stated", "availability": o.availability or "not stated",
         "warranty": o.warranty or "not stated",
+        "minimum_order": o.moq, "volume_terms": o.bulk, "pack": o.pack_text,
         "compatibility": {"exact": "model number matches", "unverified": "match not verified",
                           "variant": "variant - check suffix"}.get(o.match_level, o.match_level) +
                          (f" ({specs})" if specs else ""),
@@ -147,7 +148,10 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
             "pick_notes": pick_notes, "missing_picks": missing, "needed": needed,
             "distinction": "Best overall value weighs price with evidence, supplier, domestic supply, delivery, "
-                           "warranty and ratings; lowest comparable cost is the cheapest same-item price."}
+                           "warranty and ratings; lowest comparable cost is the cheapest same-item price.",
+            "claims_note": "Delivery, stock, warranty, minimum-order and discount terms are what each supplier's "
+                           "listing says (supplier claims), not verified. Totals are calculated from them; unknown "
+                           "costs are listed, not guessed."}
 
 
 def _qty_text(quantity: int | None, order_length: dict[str, Any] | None) -> str:
