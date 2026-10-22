@@ -272,3 +272,22 @@ def test_pasting_a_picture_starts_a_photo_search(servers, browser, tmp_path):
     }""", b64)
     page.wait_for_selector("text=Photo not read")  # the test server has no AI key: Google Lens is offered instead
     page.close()
+
+
+def test_filters_are_open_on_the_search_page_and_send_condition(servers, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(servers["ready"])
+    page.wait_for_selector("#filters", state="visible")  # part of the search, not hidden behind a button
+    page.click("text=Used")
+    page.fill("#price-max", "60000")
+    page.fill("#year-min", "2015")
+    page.fill("#hours-max", "5000")
+    page.fill("#q", "used telehandler")
+    with page.expect_request(lambda r: r.url.endswith("/api/research")) as req:
+        page.click("#search-btn")
+        page.wait_for_selector("form.clarify, .progress, .notice, .lead")
+        if page.locator("form.clarify").count():
+            page.click("text=Skip questions")
+    sent = req.value.post_data_json["filters"]
+    assert sent == {"price_max": 60000, "year_min": 2015, "hours_max": 5000, "condition": "used"}
+    page.close()

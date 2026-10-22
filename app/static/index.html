@@ -64,6 +64,12 @@
             </div>
             <span class="f-pair"><input type="number" id="price-min" min="0" step="any" placeholder="any" aria-label="Lowest price in CAD">
               to <input type="number" id="price-max" min="0" step="any" placeholder="any" aria-label="Highest price in CAD"></span>
+            <span class="f-pair">Condition
+              <span class="seg seg-mini" role="radiogroup" aria-label="Condition">
+                <label><input type="radio" name="f-cond" value="" checked><span>Any</span></label>
+                <label><input type="radio" name="f-cond" value="new"><span>New</span></label>
+                <label><input type="radio" name="f-cond" value="used"><span>Used</span></label>
+              </span></span>
           </div>
           <div class="f-row">
             <span class="f-label">Vehicles and equipment</span>
@@ -73,8 +79,7 @@
               <select id="km-unit" aria-label="Distance unit"><option value="km">km</option><option value="mi">miles</option></select></span>
             <span class="f-pair">Up to <input type="number" id="hours-max" min="0" placeholder="any" aria-label="Most hours"> hours</span>
           </div>
-          <p class="small muted f-note">Filters check what each listing states. A listing that doesn't state the year, km or hours
-            stays in and is marked "not stated", so check it yourself.</p>
+          <p class="small muted f-note">Listings that don't state the year, km, hours or condition stay in, marked "not stated".</p>
           <div class="actions">
             <button type="button" class="btn primary" id="filters-apply" hidden>Apply to this result (no new search)</button>
             <button type="button" class="btn small" id="filters-clear">Clear filters</button>

@@ -238,3 +238,17 @@ def test_sold_and_closed_auctions_are_market_evidence_not_listings():
     assert [s["offer_id"] for s in plain["sold"]] == ["O1"] and plain["sold"][0]["price"] == 3795.0
     groups = {g["key"]: g for g in res["market_value"]["groups"]}
     assert groups["completed_sales"]["count"] == 1  # kept for market research
+
+
+def test_condition_filter():
+    offers = [_offer(1, 72480.0, "2027 RAM 1500 new for sale (271072-new), Warlock 4x4", supplier_type="unknown"),
+              _offer(2, 29999.0, "2019 RAM 1500 Big Horn, 98,000 km", supplier_type="unknown"),
+              _offer(3, 41000.0, "RAM 1500 Big Horn 4x4", supplier_type="unknown")]
+    used = _filtered({"condition": "used"}, offers, name="ram 1500")
+    by = {o["id"]: o for o in used["offers"]}
+    assert by["O1"]["condition"] == "new" and any("you chose used only" in r for r in by["O1"]["exclusion_reasons"])
+    assert by["O2"]["condition"] == "used" and not by["O2"]["facts"].get("not_stated")
+    assert by["O3"]["facts"]["not_stated"] == ["condition"]
+    assert {p["offer_id"] for p in used["recommendation"]["listing_pages"]} == {"O2", "O3"}
+    new = _filtered({"condition": "new"}, offers, name="ram 1500")
+    assert {p["offer_id"] for p in new["recommendation"]["listing_pages"]} == {"O1", "O3"}

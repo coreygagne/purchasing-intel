@@ -458,10 +458,11 @@ aren't. The changes:
   or auction closed" (market evidence) and count in market value's completed sales. Auction listings without a
   live bid say "check it's still open". Toy detection covers the common toy and model brands, "1/64"-style
   scales and merchandise (posters, manuals); a word the request itself uses ("truck scale") is never filtered.
-- **Filters:** a Filters panel next to the search options: price range (a two-handle slider plus exact
-  amounts, CAD), and for vehicles and equipment the model year range, maximum km (or miles) and maximum hours.
-  They can be changed on a result without searching again (no credits). A listing outside a filter is left
-  out; one that doesn't state the year, km or hours stays in, marked "not stated". Search snippets often don't
+- **Filters:** shown under the search box on the search page: price range (a two-handle slider plus exact
+  amounts, CAD), condition (any, new or used), and for vehicles and equipment the model year range, maximum km
+  (or miles) and maximum hours. On a result they fold away behind "Change filters" and can be changed without
+  searching again (no credits). A listing outside a filter is left out; one that doesn't state the year, km,
+  hours or condition stays in, marked "not stated". Search snippets often don't
   state km or hours, so those two filters catch some listings, not all.
 - **Where to look:** "In Thunder Bay" and "Outside Thunder Bay" toggles next to the search (both on by
   default). Thunder Bay only runs the local searches and compares only sellers placed in Thunder Bay; outside

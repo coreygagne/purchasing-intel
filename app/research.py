@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 11
+ANALYSIS_VERSION = 12
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -749,6 +749,8 @@ def _page_details(s: Source, html: str, fetched_at: str) -> None:
 
 
 _AD_TYPES = {"classifieds / used", "auction / surplus"}
+_NEW_AD = re.compile(r"(?<!like )(?<!like-)\bnew\b(?!\s+(?:and|&|or|/)\s+used)(?!\s+(?:tires?|tyres?|paint|brakes?|battery))",
+                     re.I)
 JUDGED_CATEGORIES = {"vehicle", "machinery", "property"}
 SHORTLIST_NOTE = ("This is a type of product, not one model, so the listings are different models from different "
                   "makers and aren't ranked by price. Pick a model that meets the checklist, or ask a local dealer "
@@ -758,7 +760,7 @@ JUDGE_NOTE = ("Vehicles, equipment, property and used items aren't ranked by pri
               "call the local dealers below; the asking prices seen are under Market value.")
 
 
-FILTER_LABELS = {"year": "year", "km": "kilometres", "hours": "hours"}
+FILTER_LABELS = {"year": "year", "km": "kilometres", "hours": "hours", "condition": "condition"}
 
 
 def _apply_filters(o: Offer, f: dict[str, float], category: str) -> None:
@@ -779,8 +781,15 @@ def _apply_filters(o: Offer, f: dict[str, float], category: str) -> None:
             facts["km"] = km
         if hours is not None:
             facts["hours"] = hours
-    unchecked = []
-    reasons = []
+    unchecked: list[str] = []
+    reasons: list[str] = []
+    cond = f.get("condition")
+    if cond in ("new", "used"):
+        stated = o.condition if o.condition in ("new", "used", "refurbished", "open box") else None
+        if stated is None:
+            unchecked.append("condition")
+        elif (cond == "new") != (stated == "new"):
+            reasons.append(f"{stated} (you chose {cond} only)")
     lo, hi = f.get("price_min"), f.get("price_max")
     if (lo is not None or hi is not None) and o.price_cad is not None and o.price_type == "listed":
         if (lo is not None and o.price_cad < lo) or (hi is not None and o.price_cad > hi):
@@ -815,6 +824,8 @@ def _condition_from_ad_text(offers: list[Offer], category: str) -> None:
             note = f"Condition read from the listing text ('{words}')."
             if note not in o.notes:
                 o.notes.append(note)
+        elif o.page_kind is None and _NEW_AD.search(o.product_title or ""):
+            o.condition = "new"  # "2027 RAM 1500 new for sale", "New 2026 F-250" (not "like new", "new and used")
 
 
 def dedupe_snippet_offers(offers: list[Offer], structured_source_ids: set[str]) -> None:
@@ -867,6 +878,8 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     _condition_from_ad_text(offers, category)
     name = identity.get("name", "")
     wanted = ex.detect_condition(name) or ("used" if ex.used_evidence(name) else None)
+    if (meta.get("filters") or {}).get("condition") == "used":
+        wanted = "used"  # the condition filter asks for used: used listings are what's compared
     year = ex.requested_model_year(name) if category in ("vehicle", "machinery") else None
     year_note = None
     if year and not any(sp["dim"] == "model year" for sp in specs):

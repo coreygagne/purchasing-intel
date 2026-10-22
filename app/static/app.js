@@ -225,6 +225,7 @@ window.addEventListener("hashchange", route);
 async function renderHome() {
   document.body.classList.remove("compact");
   $("#filters-apply").hidden = true;
+  toggleFilters(true);  // on the search page the filters are part of the search
   state.comparison = null;
   const view = $("#view");
   view.replaceChildren();
@@ -327,6 +328,7 @@ function paintSlider() {
   paintSlider(); filtersChanged();
 }));
 ["#year-min", "#year-max", "#km-max", "#km-unit", "#hours-max"].forEach((sel) => $(sel).addEventListener("input", filtersChanged));
+document.querySelectorAll('input[name="f-cond"]').forEach((r) => r.addEventListener("change", filtersChanged));
 $("#filters-btn").addEventListener("click", () => toggleFilters());
 $("#filters-clear").addEventListener("click", () => { setFilters({}); filtersChanged(); });
 $("#filters-apply").addEventListener("click", applyFiltersToResult);
@@ -340,8 +342,8 @@ function collectFilters() {
   const km = num("#km-max");
   const f = { price_min: num("#price-min"), price_max: num("#price-max"), year_min: num("#year-min"),
     year_max: num("#year-max"), km_max: km == null ? null : Math.round($("#km-unit").value === "mi" ? km * 1.609344 : km),
-    hours_max: num("#hours-max") };
-  return Object.fromEntries(Object.entries(f).filter(([, v]) => v != null && !Number.isNaN(v)));
+    hours_max: num("#hours-max"), condition: document.querySelector('input[name="f-cond"]:checked')?.value || null };
+  return Object.fromEntries(Object.entries(f).filter(([, v]) => v != null && v !== "" && !Number.isNaN(v)));
 }
 function setFilters(f) {
   $("#price-min").value = f.price_min ?? ""; $("#price-max").value = f.price_max ?? "";
@@ -349,11 +351,14 @@ function setFilters(f) {
   $("#price-hi").value = f.price_max != null ? priceToPos(f.price_max) : P_STEPS;
   $("#year-min").value = f.year_min ?? ""; $("#year-max").value = f.year_max ?? "";
   $("#km-max").value = f.km_max ?? ""; $("#km-unit").value = "km"; $("#hours-max").value = f.hours_max ?? "";
+  const cond = document.querySelector(`input[name="f-cond"][value="${f.condition || ""}"]`);
+  if (cond) cond.checked = true;
   paintSlider(); filtersChanged();
 }
 function filtersChanged() {
   const n = Object.keys(collectFilters()).length;
   $("#filters-btn").textContent = n ? `Filters (${n})` : "Filters";
+  $("#filters-btn").title = "Show or hide the filters";
   $("#filters-btn").classList.toggle("on", n > 0);
 }
 function filtersText(f) {
@@ -366,6 +371,7 @@ function filtersText(f) {
   if (f.year_min != null || f.year_max != null) parts.push(f.year_min != null && f.year_max != null ? `${f.year_min} to ${f.year_max}` : f.year_min != null ? `${f.year_min} or newer` : `${f.year_max} or older`);
   if (f.km_max != null) parts.push(`up to ${Number(f.km_max).toLocaleString("en-CA")} km`);
   if (f.hours_max != null) parts.push(`up to ${Number(f.hours_max).toLocaleString("en-CA")} hours`);
+  if (f.condition) parts.push(`${f.condition} only`);
   return parts.join("; ");
 }
 async function applyFiltersToResult() {
@@ -619,6 +625,7 @@ async function openComparison(id) {
   renderComparison();
   state.entering = false;
   setFilters(r.body.result.filters || {});
+  toggleFilters(false);  // on a result the answer comes first; "Change filters" opens them
 }
 
 function renderComparison() {

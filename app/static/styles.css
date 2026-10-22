@@ -150,7 +150,7 @@ button, input, select { font: inherit; color: inherit; }
 .options { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; margin-top: 14px; }
 .seg { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: var(--radius); overflow: hidden; }
 .seg label { position: relative; }
-.seg input { position: absolute; opacity: 0; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }  /* the label takes the click */
 .seg span { display: block; padding: 6px 12px; cursor: pointer; font-size: 14px; border-left: 1px solid var(--rule); }
 .seg label:first-child span { border-left: 0; }
 .seg input:checked + span { background: var(--ink); color: var(--paper); }
@@ -401,6 +401,7 @@ a[data-img]::after { content: ""; display: inline-block; width: 10px; height: 8p
   border-radius: var(--radius); background: var(--paper); color: var(--ink); }
 .f-pair select { width: auto; }
 .f-note { margin: 0; }
+.seg-mini label span { padding: 5px 10px; font-size: 13px; }
 .dual { --lo: 0%; --hi: 100%; position: relative; width: 260px; height: 28px; }
 .dual::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px;
   background: linear-gradient(90deg, var(--rule) var(--lo), var(--ink) var(--lo), var(--ink) var(--hi), var(--rule) var(--hi)); }
@@ -416,7 +417,7 @@ a[data-img]::after { content: ""; display: inline-block; width: 10px; height: 8p
 /* where to look: two toggles that can both be on */
 .area { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .area label { position: relative; }
-.area input { position: absolute; opacity: 0; }
+.area input { position: absolute; opacity: 0; pointer-events: none; }
 .area span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--rule-strong);
   border-radius: var(--radius); cursor: pointer; font-size: 14px; color: var(--ink-2); background: var(--sheet); }
 .area span::before { content: ""; width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 2px; flex: none; }

@@ -42,6 +42,7 @@ class Filters(BaseModel):
     year_max: int | None = Field(default=None, ge=1900, le=2100)
     km_max: int | None = Field(default=None, ge=0, le=10_000_000)
     hours_max: int | None = Field(default=None, ge=0, le=1_000_000)
+    condition: Literal["new", "used"] | None = None
 
 
 class ResearchBody(BaseModel):
@@ -313,7 +314,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         async def runner() -> None:
             try:
                 req = ResearchRequest(query=query, depth=body.depth, quantity=applied["quantity"],
-                                      comparison_id=body.comparison_id, used_ok=applied["used_ok"],
+                                      comparison_id=body.comparison_id,
+                                      # "new only" skips the used, auction and sold-price searches
+                                      used_ok=applied["used_ok"] and not (body.filters and body.filters.condition == "new"),
                                       answers=applied["answers"], assumptions=applied["assumptions"],
                                       spec_text=applied["spec_text"], length_text=applied["length_text"],
                                       intended_use=applied["intended_use"], area=body.area,

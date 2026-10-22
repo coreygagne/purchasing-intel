@@ -200,7 +200,7 @@ _AD_TYPES = {CLASSIFIEDS, AUCTION}
 def _filtered_out(o: Offer) -> bool:
     """Left out by the search filters or the area chosen (Thunder Bay only, outside only)."""
     return any(r.startswith("outside your price range") or "outside your filter" in r or "you chose" in r
-               for r in o.exclusion_reasons)
+               for r in o.exclusion_reasons)  # area, price, year, km, hours and condition filters
 
 
 NOT_SELLERS = {FORUM, REVIEW, VIDEO, COMPLAINTS, DEALS, BUSINESS_DIRECTORY}
