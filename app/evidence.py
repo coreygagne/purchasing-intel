@@ -522,7 +522,7 @@ def is_search_results_url(url: str) -> bool:
 _MANY_TITLE = re.compile(r"^\W*\d[\d,]*\+?\s+(?:ads?|results?|listings?|items?|products?|matches)\b|"
                          r"\bmore than \d[\d,]*\+?\s+(?:in|results?|listings?|ads?|items?|products?)\b|"
                          r"\b\d[\d,]*\+?\s+(?:listings|results|ads)\b|^\(\d[\d,]*\)\s|"
-                         r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d", re.I)
+                         r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d|\bpage \d+ of \d+\b|\barchives\b", re.I)
 # "2019 Ford F-150 for Sale in Ontario", "Used Forklifts For Sale | Crown": an inventory or category page unless
 # its address names one listing ("/listing/for-sale/236473081/...", "...-id14472759.html")
 _FOR_SALE_MANY = re.compile(r"\bfor (?:sale|rent|lease)\b(?:\s+(?:in|near|nationwide|across|around)\b|"

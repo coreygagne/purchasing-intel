@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 6
+ANALYSIS_VERSION = 7
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -735,6 +735,9 @@ def _page_details(s: Source, html: str, fetched_at: str) -> None:
 
 _AD_TYPES = {"classifieds / used", "auction / surplus"}
 JUDGED_CATEGORIES = {"vehicle", "machinery", "property"}
+SHORTLIST_NOTE = ("This is a type of product, not one model, so the listings are different models from different "
+                  "makers and aren't ranked by price. Pick a model that meets the checklist, or ask a local dealer "
+                  "which one suits your site, then search its model number to compare like-for-like prices.")
 JUDGE_NOTE = ("Vehicles, equipment, property and used items aren't ranked by price: listings differ in condition, "
               "hours or mileage, options and location, which need a person's judgment. Open the listing pages and "
               "call the local dealers below; the asking prices seen are under Market value.")
@@ -814,18 +817,26 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     # vehicles, equipment, property and used items: listings differ in condition, hours, mileage, options and
     # location, so the app shows them for a person to judge instead of ranking prices
     judge = category in JUDGED_CATEGORIES or wanted == "used"
+    # a type rather than a model ("portable two-way radio"): different makers' models aren't ranked by price
+    shortlist = not judge and not tokens and guides.match(name) is not None
     apply_match(offers, tokens, by_id, specs, length, category=category)
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity, order_length=length,
                             badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
+    for o in offers:
+        words = guides.consumer_words(name, f"{o.product_title} {o.evidence_quote or ''}")
+        if words:
+            o.exclusion_reasons.append(f"looks like a consumer product ('{words}') - not built or checked for "
+                                       "industrial use")
+            o.comparable = False
     an.stale_copy_flags(offers, meta.get("researched_at"))
     an.set_compare_values(offers)
     conflicts += an.outlier_flags(offers)
     rec = an.recommend(offers, tokens, specs=specs, order_length=length)
-    if judge:
+    if judge or shortlist:
         rec = {"lowest": None, "best_value": None, "basis": rec.get("basis"), "pool_size": rec.get("pool_size", 0),
-               "notes": [JUDGE_NOTE]}
+               "notes": [JUDGE_NOTE if judge else SHORTLIST_NOTE]}
     if year_note:
         rec["notes"].insert(0, year_note)
     by_offer = {o.id: o for o in offers}
@@ -837,12 +848,16 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
                                home_city=disc.HOME["city"], quantity=quantity, item=identity.get("name", ""),
                                tokens=tokens)
     market = mk.market_value(offers, tokens, length, category)
+    if shortlist:
+        market["overall_new"] = None
+        market["notes"].insert(0, "These are different models, so no single market value is shown: compare prices "
+                                  "once you've picked a model.")
     fx_public = {cur: asdict(r) for cur, r in fx.items() if cur != "CAD"}
     checklist = import_checklist([asdict(o) for o in offers], fx_public, clean, category)
     compliance = COMPLIANCE.get(category, COMPLIANCE["general"])
     used_ok = (meta.get("plan") or {}).get("used_ok", True)
     plainly = recommend_plainly(offers, vendors, rec, tokens, quantity, length, home_province, used_ok, clean,
-                                judge=judge)
+                                judge="listings" if judge else ("shortlist" if shortlist else None))
     rfqs = rfq_drafts(vendors, identity, quantity, length, meta.get("answers"), compliance, category)
     cov = coverage_report(meta, sources, offers, vendors, market)
     quality = an.quality_evidence(sources, offers, tokens)

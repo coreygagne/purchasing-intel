@@ -73,9 +73,10 @@ def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: i
 def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: dict[str, Any], tokens: list[str],
                       quantity: int | None, order_length: dict[str, Any] | None, home_province: str,
                       used_ok: bool = True, assumptions: dict[str, float | None] | None = None,
-                      judge: bool = False) -> dict[str, Any]:
-    """`judge`: vehicles, equipment, property and used items - no ranking or picks; the listing pages and local
-    dealers are laid out for a person to judge."""
+                      judge: str | None = None) -> dict[str, Any]:
+    """`judge`: no ranking or picks. "listings" (vehicles, equipment, property, used items): the listing pages and
+    local dealers are laid out for a person to judge. "shortlist" (a product type, not a model): the priced
+    options found, to pick a model from."""
     by_id = {o.id: o for o in offers}
     vendor_of = _vendor_index(vendors)
     comparable = [o for o in offers if o.comparable and o.compare_value is not None
@@ -154,7 +155,7 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
             why.append("Risks: " + "; ".join(row["risks"]) + ".")
         lead = {"offer_id": best.id, "supplier": best.supplier, "url": best.url, "why": why}
 
-    pages = listing_pages(offers, vendor_of)
+    pages = listing_pages(offers, vendor_of, options=judge == "shortlist")
     needed = _needed(rec, lowest, best, vendors, rows, order_length, pages, judge)
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
             "judge": judge, "judge_note": rec["notes"][-1] if judge and rec.get("notes") else None,
@@ -193,10 +194,13 @@ def _advantages(best: Offer, other: Offer) -> list[str]:
 _AD_TYPES = {CLASSIFIEDS, AUCTION}
 
 
-def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads. Local first."""
+def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
+                  options: bool = False) -> list[dict[str, Any]]:
+    """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads; with
+    `options`, also every listing that passed the comparison checks. Local first."""
     out, seen = [], set()
-    pool = [o for o in offers if o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)]
+    pool = [o for o in offers if o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)
+            or (options and o.comparable)]
     pool.sort(key=lambda o: ((vendor_of.get(o.id) or {}).get("tier") != "local", o.price is None))
     for o in pool:
         if o.url in seen or o.superseded() or is_non_commercial(o.supplier_domain):
@@ -215,20 +219,30 @@ def _needed(rec: dict[str, Any], lowest: Offer | None, best: Offer | None, vendo
             pages: list[dict[str, Any]] | None = None, judge: bool = False) -> list[str]:
     out = []
     pages = pages or []
+    if judge == "shortlist":
+        out.append("Pick a model that meets the checklist (or ask a local dealer which suits your site and works with "
+                   "what you have), then search its model number to compare like-for-like prices.")
     if judge:
         # local businesses, not the ad sites: those that list the item first, then those with a phone number
         dealers = sorted((v for v in vendors if v["tier"] == "local" and v.get("business_kind") != "service"
                           and v.get("type") not in (*_AD_TYPES, MARKETPLACE)),
                          key=lambda v: (not v.get("lists_item"), not v["phones"]))[:4]
-        if pages:
+        if judge == "shortlist":
+            dealers = [v for v in dealers if v.get("lists_item")]  # only local businesses seen selling this type
+        if pages and judge == "shortlist":
+            out.append("See the models and prices on: " + ", ".join(dict.fromkeys(p["supplier"] for p in pages)) + ".")
+        elif pages:
             out.append("Open these listing pages and compare individual ads (condition, hours or mileage, options, "
                        "location): " + ", ".join(dict.fromkeys(p["supplier"] for p in pages)) + ".")
         if dealers:
             out.append("Call local dealers about what they have now: " + ", ".join(
                 v["name"] + (f" ({v['phones'][0]['value']})" if v["phones"] else "") for v in dealers) + ".")
-        out.append("Before buying: inspect it in person (or have a qualified inspector or mechanic do it), ask for "
-                   "service records, and check for liens or other claims (vehicles: a CARFAX report or Ontario's Used "
-                   "Vehicle Information Package).")
+        if judge == "listings":
+            out.append("Before buying: inspect it in person (or have a qualified inspector or mechanic do it), ask "
+                       "for service records, and check for liens or other claims (vehicles: a CARFAX report or "
+                       "Ontario's Used Vehicle Information Package).")
+        else:
+            out.append("Request quotes for the model you pick: the drafts in the Suppliers tab include the checklist.")
         return list(dict.fromkeys(out))
     if lowest is None and any(p["many"] and p["price"] is not None for p in pages):
         out.append("Some prices were only seen on pages listing many products or ads (" + ", ".join(

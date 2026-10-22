@@ -38,3 +38,23 @@ def test_quote_request_carries_answers_and_checklist():
     assert "Must work with current radios: Motorola XPR 3300" in d
     assert "Classified hazardous area: Yes - certification" in d
     assert "Please also confirm:" in d and "ISED" in d
+
+
+def test_type_search_gives_a_shortlist_not_a_ranking():
+    from tests.test_listing_pages import _offer, _run
+    offers = [
+        _offer(1, 81.99, "Digital Walkie Talkies 22 Channels for Camping, Hiking", supplier_type="retailer"),
+        _offer(2, 249.0, "Kenwood NX-P1300 portable two-way radio", supplier_type="industrial distributor"),
+        _offer(3, 409.5, "Motorola R2 portable two-way radio", supplier_type="industrial distributor"),
+        _offer(4, 300.0, "Portable Radios Archives - Page 2 of 3", supplier_type="industrial distributor"),
+    ]
+    res = _run("portable two-way radio", offers, "electronics")
+    plain = res["recommendation"]
+    assert plain["judge"] == "shortlist" and plain["lead"] is None and plain["picks"] == {}
+    assert res["recommendations"]["lowest"] is None and res["market_value"]["overall_new"] is None
+    by = {o["id"]: o for o in res["offers"]}
+    assert not by["O1"]["comparable"] and any("consumer product" in r for r in by["O1"]["exclusion_reasons"])
+    assert by["O4"]["page_kind"] == "results"
+    shown = {p["offer_id"] for p in plain["listing_pages"]}
+    assert {"O2", "O3"} <= shown and "O1" not in shown
+    assert res["guide"]["key"] == "radios"

@@ -380,6 +380,7 @@ app/
   main.py          FastAPI routes, background research jobs
   research.py      workflow orchestration; analyze() is pure and re-runnable
   clarify.py       clarify-first questions, stored answers, stated assumptions
+  guides.py        built-in buying guides for broad terms (radios, work lights, air compressors, safety glasses)
   discovery.py     research plan: categories, channels, markets (Thunder Bay first), follow-up rounds
   vendors.py       supplier records with sourced contacts and location tiers
   market.py        market value groups and order totals (tax shown separately)
@@ -405,6 +406,32 @@ scripts/smoke_test.py   live check with real keys
 ---
 
 ## Status and limits (honest)
+
+**Scope decision (2026-10-22): a dependable work tool, not a platform.** After an audit, the tool was
+narrowed to what saves time on real purchases: finding Thunder Bay and Canadian suppliers with sourced
+contacts, comparing like-for-like prices where they're published, and drafting quote requests where they
+aren't. The changes:
+- **Never recommended as an offer:** pages that list many ads or products ("118 ads for…", "Page 2 of 3"),
+  price guides and value calculators, and news, government or school pages. Their prices stay as labelled
+  market evidence. The used pick takes a fixed asking price over an auction bid in progress.
+- **Vehicles, equipment, property and used items aren't ranked by price.** Listings differ in condition,
+  hours or mileage, options and location, so the app lays out the listing pages and local dealers for a
+  person to judge, with a before-you-buy checklist. A model year in the request ("2019 F-150") is checked
+  against each listing's title.
+- **Broad terms get a short built-in guide** (`app/guides.py`): radios, work lights, air compressors and
+  safety glasses. It shows the main types and what each is for (click one to search for it), the 2-3
+  questions that change the answer (what you use now, where, hazardous areas), a "confirm with the
+  supplier" checklist that also goes into quote requests, and safety flags. It's rule-based (no AI call,
+  no cost), names no products or prices, and is labelled "general guidance - verify".
+- **A type is not a model.** A search such as "portable two-way radio" returns different makers' models, so
+  the app gives a shortlist instead of a "best value", and keeps consumer products (camping walkie-talkies)
+  out of it.
+- **Live check (2026-10-22, Tavily, quick depth):** "portable two-way radio" first ranked a Best Buy camping
+  walkie-talkie pack against commercial radios; it now shows a shortlist with the camping set excluded.
+  "Milwaukee 2767-20" behaved as before (exact-model prices compared). Saved earlier runs re-analysed under
+  the new rules: no loss of comparable prices for exact-model items.
+- **Out of scope on purpose:** price ranking for vehicles and property, worldwide coverage, deeper import
+  modelling, dashboards and forecasting.
 
 **Built and tested against the simulated web:** everything described above. An independent code review
 (two rounds) found accuracy and safety issues. They were fixed and covered by regression tests

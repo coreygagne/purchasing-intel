@@ -497,8 +497,9 @@ function keyFindings(res, offersById) {
 function leadCard(plain, res) {
   if (plain.judge) {
     const pages = plain.listing_pages || [];
-    return h("section", { class: "lead none" }, h("div", { class: "kind" }, "For you to judge"),
-      h("div", { class: "head" }, "Listings to compare yourself - no price ranking"),
+    const options = plain.judge === "shortlist";
+    return h("section", { class: "lead none" }, h("div", { class: "kind" }, options ? "Shortlist - pick a model first" : "For you to judge"),
+      h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
       pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier), p.local ? " (Thunder Bay)" : "",
         `: ${p.title}`, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",

@@ -113,6 +113,13 @@ double-click the same file again.
    ready-made quote request in your email program; nothing is sent until you send it.
 6. The **Coverage** tab shows what was searched and what couldn't be reached.
 
+Not sure exactly what you need? Type a broad term such as `radios`, `work lights`, `air compressors` or
+`safety glasses`. The app shows the main types and what each is for; click one to search for it. Its
+checklist (labelled general guidance) goes into your quote requests.
+
+For vehicles, equipment, property and used items, the app doesn't pick a "best price": it lists the listing
+pages and local dealers for you to compare, because condition and options matter more than the asking price.
+
 ---
 
 ## Changing a setting

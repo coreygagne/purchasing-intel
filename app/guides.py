@@ -60,6 +60,8 @@ GUIDES: list[dict[str, Any]] = [
             "Battery: lasts a full shift in the cold; spare batteries and multi-unit chargers.",
             "Service: local programming, repair and warranty support.",
         ],
+        # camping and family walkie-talkies (licence-free FRS/GMRS): short range, not built for industrial work
+        "consumer": r"\b(?:camping|hiking|kids|family|toys?|FRS|GMRS)\b",
         "hazard": "Hazardous areas need intrinsically safe radios certified for that area's classification (marks "
                   "such as CSA, UL, ATEX or IECEx). Confirm the classification with your safety lead before ordering.",
     },
@@ -186,6 +188,15 @@ def match(query: str) -> tuple[dict[str, Any], bool] | None:
         if g["_match"].search(q):
             return g, False
     return None
+
+
+def consumer_words(query: str, text: str) -> str | None:
+    """Words showing a listing is a consumer product ("Camping"), for a guide that defines them."""
+    found = match(query)
+    if not found or not found[0].get("consumer"):
+        return None
+    m = re.search(found[0]["consumer"], text or "", re.I)
+    return m.group(0) if m else None
 
 
 def public(query: str) -> dict[str, Any] | None:
