@@ -210,3 +210,31 @@ def test_scale_models_axle_lots_and_acquisition_news_are_not_trucks():
     assert ex.vehicle_part("2025 Ford F350 4x4 Hi-Rail Pickup Truck") is None
     assert ex.article_words("Custom Truck One Source Acquires HiRail Leasing Group")
     assert ex.rental_words("Hi-Rail Trucks for Rent") and ex.rental_words("2025 Ford F350 Hi-Rail Pickup Truck") is None
+
+
+def test_more_toys_and_scale_notation_are_caught_but_not_half_ton_trucks():
+    for toy in ("First Gear 1/64 Ford F-350 Hi-Rail Truck", "Hi-Rail Truck - Tonka", "1:50 Scale Ford F-550 Hi-Rail",
+                "Ford F-350 Hi-Rail Repair Manual"):
+        assert ex.vehicle_toy(toy), toy
+    for truck in ("Ford F-250 1/2 ton pickup", "2019 Ford F-350 SD 4x4 Crew Cab HI-Rail Pickup"):
+        assert ex.vehicle_toy(truck) is None, truck
+
+
+def test_a_word_the_request_uses_is_not_filtered_out():
+    res = _run("truck scale", [_offer(1, 45000.0, "70 ft truck scale, 100 ton", supplier_type="unknown")], "vehicle")
+    assert res["offers"][0]["match_level"] != "compatible"
+
+
+def test_sold_and_closed_auctions_are_market_evidence_not_listings():
+    assert ex.closed_listing("1994 Ford F250 XL - Sold for $3,795") and ex.closed_listing("Auction ended Oct 12")
+    assert ex.closed_listing("2022 Ford F-250 Pick-up Truck for sale by PARAMOUNT TRUCK SALES") is None
+    offers = [_offer(1, 3795.0, "1994 Ford F250 XL Hi-Rail - Sold for $3,795", supplier_type="auction / surplus"),
+              _offer(2, 116850.0, "2025 Ford F350 4x4 Hi-Rail Pickup Truck", supplier_type="unknown"),
+              _offer(3, 2811.4, "2019 Ford F-350 Hi-Rail Pickup - current bid $2,811", supplier_type="auction / surplus",
+                     price_kind="current_bid")]
+    res = _run("hi-rail pickup trucks", offers, "vehicle")
+    plain = res["recommendation"]
+    assert {p["offer_id"] for p in plain["listing_pages"]} == {"O2", "O3"}  # a live auction is still buyable
+    assert [s["offer_id"] for s in plain["sold"]] == ["O1"] and plain["sold"][0]["price"] == 3795.0
+    groups = {g["key"]: g for g in res["market_value"]["groups"]}
+    assert groups["completed_sales"]["count"] == 1  # kept for market research

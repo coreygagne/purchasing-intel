@@ -158,10 +158,11 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
         lead = {"offer_id": best.id, "supplier": best.supplier, "url": best.url, "why": why}
 
     pages = listing_pages(offers, vendor_of, options=judge)
+    sold = sold_listings(offers) if judge else []
     needed = _needed(rec, lowest, best, vendors, rows, order_length, pages, judge)
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
             "judge": judge, "judge_note": rec["notes"][-1] if judge and rec.get("notes") else None,
-            "listing_pages": pages,
+            "listing_pages": pages, "sold": sold,
             "pick_notes": pick_notes, "missing_picks": missing, "needed": needed,
             "distinction": "Best overall value weighs price with evidence, supplier, domestic supply, delivery, "
                            "warranty and ratings; lowest comparable cost is the cheapest same-item price.",
@@ -204,7 +205,7 @@ def _filtered_out(o: Offer) -> bool:
 
 NOT_SELLERS = {FORUM, REVIEW, VIDEO, COMPLAINTS, DEALS, BUSINESS_DIRECTORY}
 _NOT_LISTABLE = ("consumer product", "doesn't name", "not a seller's page", "price guide", "completed sale", "rental",
-                 "article")
+                 "article", "closed auction")
 
 
 def _listable(o: Offer) -> bool:
@@ -215,6 +216,21 @@ def _listable(o: Offer) -> bool:
     if ex.article_words(o.product_title):
         return False
     return not any(any(w in r for w in _NOT_LISTABLE) for r in o.exclusion_reasons)
+
+
+def sold_listings(offers: list[Offer]) -> list[dict[str, Any]]:
+    """Sold items and closed auctions of the item asked for: what it went for, as market evidence."""
+    out, seen = [], set()
+    for o in offers:
+        if o.url in seen or not (o.price_kind == "completed_sale" or (o.facts or {}).get("closed")):
+            continue
+        if o.match_level in ("different", "compatible", "variant") or o.superseded():
+            continue
+        seen.add(o.url)
+        out.append({"offer_id": o.id, "supplier": o.supplier, "url": o.url, "title": o.product_title,
+                    "price": o.price if o.price_kind == "completed_sale" else None, "currency": o.currency,
+                    "observed_at": o.observed_at, "image": o.image, "facts": o.facts})
+    return out[:10]
 
 
 def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
@@ -241,7 +257,7 @@ def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
         out.append({"offer_id": o.id, "supplier": o.supplier, "url": o.url, "title": o.product_title,
                     "price": o.price if asking else None, "currency": o.currency, "price_kind": o.price_kind,
                     "many": o.page_kind == "results", "observed_at": o.observed_at, "image": o.image,
-                    "facts": o.facts,
+                    "facts": o.facts, "auction": o.supplier_type == AUCTION,
                     "local": (vendor_of.get(o.id) or {}).get("tier") == "local"})
     asked = sorted(p["price"] for p in out if p["price"] is not None and p["price_kind"] == "asking")
     if len(asked) >= 3:

@@ -336,6 +336,20 @@ _ARTICLE = re.compile(r"^\W*build an? \b|\bblog\b|\bwhy (?:the|you|we)\b|\bhow t
                       re.I)
 
 
+# sold, or the auction is over: market evidence, not something to buy ("Sold for", "Auction ended", "Lot closed")
+_CLOSED = re.compile(r"\bsold\b(?!\s+(?:by|out|through|via|exclusively|separately|individually|as|in)\b)|"
+                     r"\b(?:auction|bidding|lot|sale|listing)\s+(?:has\s+)?(?:ended|closed|is closed)\b|"
+                     r"\bclosed\s+(?:auctions?|lots?)\b|\bthis (?:item|listing|auction|lot) (?:has )?(?:ended|sold|closed)\b|"
+                     r"\bno longer available\b|\bprice realized\b|"
+                     r"\bended\s+(?:on\s+)?(?:\d|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?)", re.I)
+
+
+def closed_listing(text: str) -> str | None:
+    """The words showing a listing has sold or its auction has closed, or None."""
+    m = _CLOSED.search(text or "")
+    return m.group(0) if m else None
+
+
 def rental_words(text: str) -> str | None:
     """The words showing a listing is a rental or lease rate, not a sale price ("Rentals", "/day"), or None."""
     m = _RENTAL.search(text or "")
@@ -349,9 +363,15 @@ def article_words(title: str) -> str | None:
 
 
 # toys and scale models of a vehicle: "Greenlight ... 1:64 Diecast", "Matchbox 2017 Ford F-350"
-_VEHICLE_TOY = re.compile(r"\bdie-?cast\b|\b1\s?:\s?\d{2,3}\b|\bscale model\b|\bmatchbox\b|\bhot wheels\b|\bgreenlight\b|"
-                          r"\btoys?\b|\breplica\b|\bmodel kit\b|\blego\b|\bremote control\b|\brc (?:car|truck)\b|"
-                          r"\bmaisto\b|\bbburago\b|\bjada\b|\bm2 machines\b|\bauto world\b|\bornament\b", re.I)
+_VEHICLE_TOY = re.compile(
+    r"\bdie-?cast\b|\b1\s?[:/]\s?\d{2,3}\b(?!\s?ton)|\bscale\b(?! (?:house|ticket|weight))|\bscale model\b|\bminiatures?\b|"
+    r"\bmatchbox\b|\bhot wheels\b|\bgreenlight\b|\btoys?\b|\breplica\b|\bmodel kit\b|\blego\b|\bremote control\b|"
+    r"\brc (?:car|truck)\b|\bmaisto\b|\bbburago\b|\bjada\b|\bm2 machines\b|\bauto world\b|\bornaments?\b|"
+    r"\bfirst gear\b|\btonka\b|\bbruder\b|\bsiku\b|\bertl\b|\bspec ?cast\b|\bjohnny lightning\b|\bracing champions\b|"
+    r"\bwelly\b|\bkinsmart\b|\bmotormax\b|\bnorscot\b|\bdiecast masters\b|\bathearn\b|\bwalthers\b|\bbachmann\b|"
+    r"\blionel\b|\bherpa\b|\bboley\b|\btamiya\b|\brevell\b|\btraxxas\b|\bride-?on\b|\bpower wheels\b|\bpedal car\b|"
+    r"\bposters?\b|\bt-?shirts?\b|\bhoodies?\b|\bkey ?chains?\b|\bmugs?\b|\bpuzzles?\b|\bstickers?\b|"
+    r"\b(?:repair|service|owner'?s) manuals?\b|\bbrochures?\b", re.I)
 # a whole vehicle's ad: starts with one model year, or states mileage, or says it's for sale
 _VEHICLE_AD = re.compile(r"^\W*(?:19|20)\d\d\b(?!\s*[-–/]\s*(?:19|20)?\d\d)|\b\d[\d,]*\s?(?:km|kms|miles)\b|"
                          r"\bfor sale\b|\b(?:crew|super) ?cab\b|\bsupercrew\b", re.I)

@@ -740,8 +740,13 @@ function leadCard(plain, res) {
       h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
       pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier, null, p.image), p.local ? " (Thunder Bay)" : "",
-        `: ${p.title}`, factsText(p.facts), p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${p.currency ? money(p.price, p.currency) : `${Number(p.price).toLocaleString("en-CA")} (currency not stated)`}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
+        `: ${p.title}`, factsText(p.facts), p.auction && p.price_kind !== "current_bid" ? h("span", { class: "muted" }, " (auction: check it's still open)") : null, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${p.currency ? money(p.price, p.currency) : `${Number(p.price).toLocaleString("en-CA")} (currency not stated)`}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
         h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
+      (plain.sold || []).length ? h("details", { class: "sold" },
+        h("summary", {}, `Sold recently or auction closed (${plain.sold.length}): market evidence, not for sale`),
+        h("ul", { class: "why" }, plain.sold.map((p) => h("li", {}, link(p.url, p.supplier, null, p.image), `: ${p.title}`, factsText(p.facts),
+          p.price != null ? ` - sold for ${p.currency ? money(p.price, p.currency) : Number(p.price).toLocaleString("en-CA")}` : "",
+          h("span", { class: "muted" }, ` · seen ${day(p.observed_at)}`))))) : null,
       h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
       h("div", { class: "next" }, h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")));
   }
@@ -775,6 +780,7 @@ function leadCard(plain, res) {
 // What a listing states for the filters ("2019, 120,000 km") and what it doesn't ("km not stated")
 function factsText(f) {
   if (!f) return null;
+  f = { ...f, closed: undefined };
   const said = [f.year, f.km != null ? `${Number(f.km).toLocaleString("en-CA")} km` : null,
     f.hours != null ? `${Number(f.hours).toLocaleString("en-CA")} hours` : null].filter(Boolean);
   const missing = (f.not_stated || []).map((k) => `${k} not stated`);

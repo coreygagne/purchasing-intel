@@ -454,6 +454,10 @@ aren't. The changes:
   (trade spellings count: hy-rail, hyrail, rail gear; lift truck). Before, ordinary pickups, tools and parts
   filled the list. Rentals and lease rates are listed separately as rental options, news and articles are left
   out, and so are scale models (HO) and lots of parts (axles).
+- **Sold and closed auctions** are never on the list of things to buy: they're shown separately as "Sold recently
+  or auction closed" (market evidence) and count in market value's completed sales. Auction listings without a
+  live bid say "check it's still open". Toy detection covers the common toy and model brands, "1/64"-style
+  scales and merchandise (posters, manuals); a word the request itself uses ("truck scale") is never filtered.
 - **Filters:** a Filters panel next to the search options: price range (a two-handle slider plus exact
   amounts, CAD), and for vehicles and equipment the model year range, maximum km (or miles) and maximum hours.
   They can be changed on a result without searching again (no credits). A listing outside a filter is left

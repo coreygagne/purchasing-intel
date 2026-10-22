@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 10
+ANALYSIS_VERSION = 11
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -891,8 +891,12 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
                 o.match_level = "different"
                 o.match_notes = [f"Doesn't mention {', '.join(missing)}."]
     if category == "vehicle":
+        asked = name.lower()
         for o in offers:
             toy, part = ex.vehicle_toy(o.product_title), ex.vehicle_part(o.product_title)
+            # a word the request itself uses is what's wanted ("truck scale", "f250 lift kit")
+            toy = toy if toy and toy.lower() not in asked else None
+            part = part if part and part.lower() not in asked else None
             if (toy or part) and o.match_level != "different":
                 o.match_level = "compatible"
                 o.match_notes = [f"Looks like a toy or scale model ('{toy}'), not the vehicle." if toy else
@@ -906,6 +910,15 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     rentals: list[Offer] = []
     for o in offers:
         _apply_filters(o, filters, category)
+        closed = ex.closed_listing(f"{o.product_title} {o.evidence_quote or ''}") \
+            if category in JUDGED_CATEGORIES else None
+        if closed or o.price_kind == "completed_sale":
+            if o.price is not None:
+                o.price_kind = "completed_sale"  # market evidence: what it sold for
+            o.facts = {**o.facts, "closed": closed or "sold"}
+            if not any("completed sale" in r for r in o.exclusion_reasons):
+                o.exclusion_reasons.append("completed sale or closed auction - market evidence, not for sale")
+            o.comparable = False
         article = ex.article_words(o.product_title) if o.supplier_type in (UNKNOWN, None) else None
         if article:
             o.exclusion_reasons.append(f"an article, not a listing ('{article}')")
