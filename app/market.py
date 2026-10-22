@@ -29,6 +29,7 @@ GROUPS = [
     ("completed_sales", "Completed sales - what items sold for"),
 ]
 MIN_FOR_MEDIAN = 3
+IMPLAUSIBLE_LOW = 0.35  # as in analysis.recommend
 
 
 def _same_item(o: Offer, tokens: list[str]) -> bool:
@@ -92,8 +93,11 @@ def market_value(offers: list[Offer], tokens: list[str], order_length: dict[str,
     for key, label in GROUPS:
         members = [(o, _value(o, basis)) for o in eligible if _group(o, category) == key]
         members = [(o, v) for o, v in members if v is not None]
-        aside = [o for o, _ in members if _set_aside(o)]
-        used = [(o, v) for o, v in members if not _set_aside(o)]
+        # the same rule as the recommendations: far below the group's median is likely a part, a deposit or an error
+        mid = statistics.median(v for _, v in members) if len(members) >= MIN_FOR_MEDIAN else None
+        low = [o for o, v in members if mid and v < mid * IMPLAUSIBLE_LOW]
+        aside = [o for o, _ in members if _set_aside(o) or o in low]
+        used = [(o, v) for o, v in members if o not in aside]
         if not members:
             continue
         vals = sorted(v for _, v in used)

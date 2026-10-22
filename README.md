@@ -438,6 +438,17 @@ aren't. The changes:
   to Anthropic and isn't stored; each reading's cost counts in the month's spend. "Try Google Lens" opens Lens
   in a new tab to upload the photo yourself (Lens can't be connected directly: its API needs the photo posted
   publicly online first).
+- **Vehicles (live check 2026-10-22, "f250 or f350 truck"):** model numbers now match however a listing writes
+  them ("f250" = "F-250" = "F 250"), "X or Y" accepts either model, and vehicle searches look for the vehicles
+  (each model asked for, used-vehicle sites, dealers and fleet pricing, auctions) instead of wholesale and
+  manufacturer searches, which found parts shops. Parts and accessories (lift kits, bumpers) and other models
+  are left off the list.
+- **Where to look:** "In Thunder Bay" and "Outside Thunder Bay" toggles next to the search (both on by
+  default). Thunder Bay only runs the local searches and compares only sellers placed in Thunder Bay; outside
+  only skips them.
+- **Listing pictures:** hovering a listing link (marked with a small frame) shows the picture from that
+  listing's page or its Google Shopping entry. Pictures appear only where the app could read the page or the
+  listing came from Google Shopping; there's no hover on phones.
 - **Recent searches** can be cleared from the home page; saved comparisons, price history and the month's
   spend record are kept.
 - **Out of scope on purpose:** price ranking for vehicles and property, worldwide coverage, deeper import

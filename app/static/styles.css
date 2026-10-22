@@ -378,6 +378,26 @@ footer.foot { margin: 40px 0 30px; color: var(--ink-3); font-size: 13px; }
 /* ------------------------------------------------------------ clarify, lead, suppliers */
 .panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .btn.small { padding: 4px 10px; font-size: 13px; }
+/* picture preview on hover: a small frame mark tells which links have one */
+a[data-img]::after { content: ""; display: inline-block; width: 10px; height: 8px; margin-left: 4px; vertical-align: 0;
+  border: 1.3px solid currentColor; border-radius: 2px; opacity: 0.6; }
+.btn[data-img]::after { margin-left: 6px; }
+.peek { position: absolute; z-index: 50; width: 280px; background: var(--sheet); border: 1px solid var(--rule-strong);
+  border-top: 3px solid var(--ink); border-radius: 0 0 var(--radius) var(--radius); padding: 8px;
+  box-shadow: 0 8px 24px rgba(10, 21, 32, 0.18); pointer-events: none; animation: fade-in 0.12s ease; }
+.peek img { display: block; width: 100%; height: 200px; object-fit: contain; background: var(--paper); }
+.peek .cap { margin-top: 6px; font-size: 12px; color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { .peek { animation: none; } }
+/* where to look: two toggles that can both be on */
+.area { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.area label { position: relative; }
+.area input { position: absolute; opacity: 0; }
+.area span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--rule-strong);
+  border-radius: var(--radius); cursor: pointer; font-size: 14px; color: var(--ink-2); background: var(--sheet); }
+.area span::before { content: ""; width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 2px; flex: none; }
+.area input:checked + span { color: var(--ink); border-color: var(--ink); font-weight: 600; }
+.area input:checked + span::before { background: var(--ink); box-shadow: inset 0 0 0 2px var(--sheet); }
+.area input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
 form.clarify { display: grid; gap: 12px; }
 .guide { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); padding: 14px 16px; }
 .guide .kind { font-weight: 700; font-size: 15px; }

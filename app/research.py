@@ -72,7 +72,7 @@ AI_EXTRACT_TIMEOUT_S = 150
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
 # 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
 # 6: "3 C" read as 3-conductor; contractors on map listings aren't quote targets; listing suppliers asked first.
-ANALYSIS_VERSION = 7
+ANALYSIS_VERSION = 8
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -103,6 +103,7 @@ class ResearchRequest:
     spec_text: str = ""             # specs from the answers ("1000 V copper"), checked in listings
     length_text: str | None = None  # a length to buy from the answers ("300 ft of")
     intended_use: str | None = None
+    area: str = "both"  # where to look: "local" (Thunder Bay only), "outside" (not Thunder Bay) or "both"
 
 
 @dataclass
@@ -245,14 +246,16 @@ class ResearchEngine:
             cfg = disc.DEPTH_BUDGET[run_depth]
             plan = disc.initial_plan(search_name, category, depth, brand=brand, alt_names=alt_names,
                                      ai_queries=extra_queries, used_ok=req.used_ok, budget=rounds[0])
+            plan = disc.scope_plan(plan, req.area)
             seen = {disc._norm(pq) for pq in plan}
 
             # 3. Round 1 searches, Google Shopping and local map listings, together ----------
             progress(f"Searching Thunder Bay first, then wider ({len(plan)} searches via {providers.web.name})", 12)
-            local_qs = disc.local_queries(search_name, category, cfg["maps"])
+            local_qs = disc.local_queries(search_name, category, cfg["maps"]) if req.area != "outside" else []
             hits, (listings, shopping_status), (local_businesses, local_status) = await _gather_or_raise(
                 self._search_all(providers, plan, cfg),
-                self._shopping(providers, search_name),
+                # Google Shopping lists national and online sellers: not part of a Thunder Bay-only search
+                self._shopping(providers, search_name) if req.area != "local" else _nothing(),
                 self._local(providers, local_qs))
             all_hits = list(hits)
             all_plan = list(plan)
@@ -283,7 +286,7 @@ class ResearchEngine:
                                         covered_domains=covered, covered_names=covered_names,
                                         local_names=[n for n in (vd.directory_business_name(s) for s in sources
                                                                  if _in_home_city(s)) if n])
-                fplan = disc.follow_up_plan(leads, search_name, category, rno, budget, seen)
+                fplan = disc.scope_plan(disc.follow_up_plan(leads, search_name, category, rno, budget, seen), req.area)
                 if not fplan:
                     stop_reason = f"no new leads to follow after round {rno - 1}"
                     break
@@ -375,6 +378,7 @@ class ResearchEngine:
                 "contact_pages": contact_pages,
                 "answers": dict(req.answers),
                 "stated_assumptions": list(req.assumptions),  # for unanswered questions ("assumptions" = import inputs)
+                "area": req.area,
                 "credits": credits,
                 "cost_estimate": {"usd": estimate_usd(credits), "prices_checked": PRICES_CHECKED,
                                   "note": "Anthropic charges estimated from reported usage at list prices"},
@@ -585,7 +589,8 @@ class ResearchEngine:
         sellers = [s for s in sources if is_seller_source(s) and "input_url" not in s.purposes
                    and "shopping" not in s.purposes]
         def priority(s: Source) -> tuple[int, int, int, int]:
-            exact = ex.match_offer(identity.model_tokens, f"{s.title} {s.snippet}").level == "exact"
+            exact = ex.match_offer(identity.model_tokens, f"{s.title} {s.snippet}",
+                                   ex.alternative_models(identity.name, identity.model_tokens)).level == "exact"
             loc = s.location or {}
             local = loc.get("tier") == "local" or loc.get("mentions_home") or "local" in s.markets
             preferred = s.type in (DISTRIBUTOR, RETAILER, MANUFACTURER, B2B_MARKETPLACE)
@@ -656,6 +661,10 @@ class ResearchEngine:
         return out
 
 
+async def _nothing() -> tuple[list[Any], None]:
+    return [], None
+
+
 async def _gather_or_raise(*aws: Awaitable[Any]) -> list[Any]:
     """Run together; if one fails, let the others finish (they share the HTTP client) and then raise."""
     results = await asyncio.gather(*aws, return_exceptions=True)
@@ -723,6 +732,7 @@ def _snippet_details(s: Source) -> None:
 
 
 def _page_details(s: Source, html: str, fetched_at: str) -> None:
+    s.image = s.image or ex.page_image(html, s.url)
     found = ex.contacts_in_html(html)
     if any(found.values()):
         s.contacts = {**found, "basis": "the supplier's own page", "seen_at": fetched_at, "url": s.url}
@@ -792,6 +802,8 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     by_id = {s.id: s for s in sources}
     for o in offers:
         o.flags = []
+        src = by_id.get(o.source_id or "")
+        o.image = src.image if src else None
     if "specs" in identity:
         specs, length = identity.get("specs") or [], identity.get("order_length") or None
     else:  # saved before spec checks existed
@@ -819,12 +831,26 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     judge = category in JUDGED_CATEGORIES or wanted == "used"
     # a type rather than a model ("portable two-way radio"): different makers' models aren't ranked by price
     shortlist = not judge and not tokens and guides.match(name) is not None
-    apply_match(offers, tokens, by_id, specs, length, category=category)
+    apply_match(offers, tokens, by_id, specs, length, category=category, any_of=ex.alternative_models(name, tokens))
+    if category == "vehicle":
+        for o in offers:
+            part = ex.vehicle_part(o.product_title)
+            if part and o.match_level != "different":
+                o.match_level = "compatible"
+                o.match_notes = [f"Looks like a part or accessory ('{part}') for the vehicle, not the vehicle."]
     an.apply_costs(offers, fx, clean, quantity, order_feet=length["feet"] if length else None)
     conflicts = an.detect_conflicts(offers)
     an.assess_comparability(offers, tokens, quantity, order_length=length,
                             badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
+    area = meta.get("area") or "both"
     for o in offers:
+        local = ((by_id.get(o.source_id or "") and by_id[o.source_id].location) or {}).get("tier") == "local"
+        if area == "local" and not local:
+            o.exclusion_reasons.append("not shown to be in Thunder Bay (you chose Thunder Bay only)")
+            o.comparable = False
+        elif area == "outside" and local:
+            o.exclusion_reasons.append("in Thunder Bay (you chose outside Thunder Bay only)")
+            o.comparable = False
         kind = guides.off_topic(name, o.product_title) if shortlist else None
         if kind and o.price is not None:
             o.exclusion_reasons.append(f"its title doesn't name {kind} - may be a different product")
@@ -851,6 +877,10 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
                                home_city=disc.HOME["city"], quantity=quantity, item=identity.get("name", ""),
                                tokens=tokens)
+    if area == "local":
+        vendors = [v for v in vendors if v["tier"] == "local"]
+    elif area == "outside":
+        vendors = [v for v in vendors if v["tier"] != "local"]
     market = mk.market_value(offers, tokens, length, category)
     if shortlist:
         market["overall_new"] = None
@@ -934,7 +964,7 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
     fx = {cur: FxRate(**r) for cur, r in (result.get("fx") or {}).items()}
     meta_keys = ["query", "depth", "quantity", "researched_at", "duration_s", "providers", "queries", "credits",
                  "cost_estimate", "fetch", "fx_errors", "plan", "local_businesses", "contact_pages", "answers",
-                 "stated_assumptions"]
+                 "stated_assumptions", "area"]
     meta = {k: result.get(k) for k in meta_keys}
     if quantity is not None:
         meta["quantity"] = quantity or None

@@ -64,6 +64,7 @@ class Source:
     # where the business is: {"tier": local|regional|canada|us|international, "basis": ...}
     location: dict[str, Any] | None = None
     badges: list[str] = field(default_factory=list)  # marketplace badges seen ("Amazon's Choice")
+    image: str | None = None  # the page's or listing's own picture (shown as a preview on hover)
 
     def public(self) -> dict[str, Any]:
         d = asdict(self)
@@ -122,6 +123,7 @@ class Offer:
     # can't be tied to one) or "valuation" (a price guide or value estimate); with a short reason
     page_kind: str | None = None
     page_kind_note: str | None = None
+    image: str | None = None  # picture from the listing's page or Google Shopping, for a preview
     # requested specs (plain-language requests) this listing's own text confirms / doesn't state / contradicts
     spec_confirmed: list[str] = field(default_factory=list)
     spec_missing: list[str] = field(default_factory=list)
@@ -282,6 +284,9 @@ class OfferBuilder:
                 x for x in [l.price_text, l.supplier, l.delivery] if x), purpose="shopping",
                 provider=l.provider, brand_words=self.brand_words)
             match = ex.parse_price_text(l.price_text or "") if l.price_text else None
+            thumb = l.extra.get("thumbnail")
+            if isinstance(thumb, str) and thumb.startswith("https://") and not src.image:
+                src.image = thumb[:1000]
             supplier = l.supplier or src.name
             if src.domain.endswith(("google.com", "google.ca")):
                 # Google product page link: the seller is the listing's "source"
@@ -525,13 +530,14 @@ _MANY_TITLE = re.compile(r"^\W*\d[\d,]*\+?\s+(?:ads?|results?|listings?|items?|p
                          r"\bshowing \d[\d,]*\s?(?:-|–|to)\s?\d[\d,]*\s+of\s+\d|\bpage \d+ of \d+\b|\barchives\b", re.I)
 # "2019 Ford F-150 for Sale in Ontario", "Used Forklifts For Sale | Crown": an inventory or category page unless
 # its address names one listing ("/listing/for-sale/236473081/...", "...-id14472759.html")
-_FOR_SALE_MANY = re.compile(r"\bfor (?:sale|rent|lease)\b(?:\s+(?:in|near|nationwide|across|around)\b|"
+_FOR_SALE_MANY = re.compile(r"\bfor (?:sale|rent|lease|auction)\b(?:\s+(?:in|near|nationwide|across|around|under)\b|"
                             r"\s*(?:[|:\-–·]|$))", re.I)
 _LISTING_ID = re.compile(r"\d{6,}|[-_]id\d{3,}", re.I)
 _VALUATION = re.compile(r"value[-\s]?calculator|appraisal|trade[-\s]?in[-\s]value|book[-\s]value|blue[-\s]?book|"
                         r"\bkbb\b|price[-\s]trends|pricing insights|\bvaluation|"
                         r"\bvalue (?:canada|guide|estimate|range|report)\b|\b(?:car|vehicle|truck|equipment) value\b|"
-                        r"/value(?:/|$)|trim levels? (?:&|and) prices", re.I)
+                        r"/value(?:/|$)|trim levels? (?:&|and) prices|\bprices,? specs\b|\bspecs,? (?:and |& )?photos\b",
+                        re.I)
 _VALUATION_QUOTE = re.compile(r"\bvalue (?:ranges?|is estimated)\s+(?:between|from)\b|\bestimated (?:market |trade-in )?"
                               r"value\b", re.I)
 
@@ -577,7 +583,8 @@ def _check_specs(specs: list[dict[str, Any]], listing: str, title: str) -> dict[
 
 def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str, Source],
                 specs: list[dict[str, Any]] | None = None, order_length: dict[str, Any] | None = None,
-                category: str | None = None) -> None:
+                category: str | None = None, any_of: bool = False) -> None:
+    """`any_of`: the request names its model numbers as alternatives ("f250 or f350")."""
     for o in offers:
         o.spec_confirmed, o.spec_missing, o.spec_conflicts = [], [], []
         if order_length and not o.per_length and o.price is not None:
@@ -598,10 +605,10 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             text = " ".join([o.product_title] + list(o.identifiers.values()))
             if o.price_basis == "snippet" and o.source_id in sources_by_id:
                 text += " " + (o.evidence_quote or "")
-        m = ex.match_offer(tokens, text)
+        m = ex.match_offer(tokens, text, any_of)
         if tokens and m.level == "exact" and o.price_basis != "llm_verified":
             # a title naming a sibling model wins over the body: "2767-22R ... Includes: (2767-20)" is a kit
-            titled = ex.match_offer(tokens, o.product_title)
+            titled = ex.match_offer(tokens, o.product_title, any_of)
             if titled.level == "variant":
                 m = titled
         if tokens and m.level in ("different", "unverified") and \

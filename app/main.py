@@ -10,7 +10,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -40,6 +40,8 @@ class ResearchBody(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=10_000_000)
     force: bool = False
     comparison_id: int | None = None
+    # where to look: Thunder Bay only, outside Thunder Bay only, or both (the default)
+    area: Literal["both", "local", "outside"] = "both"
     # answers to the clarifying questions; None = skipped. Stored, and merged with earlier answers.
     answers: dict[str, str | int | float | bool | None] | None = None
 
@@ -259,7 +261,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         query = body.query.strip()
         if not query:
             raise HTTPException(400, "Enter a product name, model number, description or URL.")
-        normalized = ex.normalize_query(query)
+        # a Thunder Bay-only (or outside-only) search is a different search from the same words everywhere
+        normalized = ex.normalize_query(query) + ("" if body.area == "both" else f" [{body.area}]")
         if not body.force and body.comparison_id is None:
             dup = db.find_recent_comparison(normalized, settings.duplicate_window_hours)
             if dup:
@@ -299,7 +302,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                       comparison_id=body.comparison_id, used_ok=applied["used_ok"],
                                       answers=applied["answers"], assumptions=applied["assumptions"],
                                       spec_text=applied["spec_text"], length_text=applied["length_text"],
-                                      intended_use=applied["intended_use"])
+                                      intended_use=applied["intended_use"], area=body.area)
                 result = await asyncio.wait_for(engine.run(req, progress, meter), timeout=settings.job_timeout_s)
                 existing = db.get_comparison(body.comparison_id) if body.comparison_id else None
                 if existing and existing.get("assumptions"):

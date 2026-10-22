@@ -197,3 +197,37 @@ def test_clear_recent_searches(servers, browser):
     page.wait_for_selector("text=Your searches will appear here.")
     assert "TX-4400 for maintenance shop" in page.inner_text(".home-lists")  # saved comparisons stay
     page.close()
+
+
+def test_area_toggles_keep_one_on_and_are_sent(servers, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(servers["ready"])
+    page.click("text=Outside Thunder Bay")
+    assert page.is_checked("#area-local") and not page.is_checked("#area-outside")
+    page.click("text=In Thunder Bay")  # the last one on stays on
+    assert page.is_checked("#area-local")
+    page.fill("#q", "Acme TX-4400 torque widget")
+    with page.expect_request(lambda r: r.url.endswith("/api/research")) as req:
+        page.click("#search-btn")
+        page.wait_for_selector("form.clarify, .progress, .notice, .lead")
+        if page.locator("form.clarify").count():
+            page.click("text=Skip questions")
+    assert req.value.post_data_json["area"] == "local"
+    page.click("text=Outside Thunder Bay")  # back to both for the other tests
+    page.close()
+
+
+def test_hovering_a_listing_link_shows_its_picture(servers, browser, tmp_path):
+    import base64
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(servers["ready"] + "/#/c/1")
+    page.wait_for_selector(".lead")
+    pic = "data:image/png;base64," + base64.b64encode(_png(tmp_path / "p.png").read_bytes()).decode()
+    page.evaluate("""(pic) => { const a = document.createElement('a'); a.href = 'https://dealer.example/1';
+        a.id = 'test-link'; a.textContent = 'Test listing'; a.dataset.img = pic; document.querySelector('.lead').prepend(a); }""", pic)
+    page.hover("#test-link")
+    page.wait_for_selector(".peek:not([hidden])")
+    assert "dealer.example" in page.inner_text(".peek .cap")
+    page.mouse.move(5, 5)
+    page.wait_for_selector(".peek", state="hidden")
+    page.close()

@@ -86,9 +86,11 @@ CATEGORIES: dict[str, Category] = {
         high_risk=True),
     "vehicle": Category(
         "vehicle", "Vehicles and trucks", ("truck dealer", "car dealership"),
-        ("local_suppliers", "dealer", "manufacturer", "used", "auction", "completed_sales", "wholesale", "reviews",
+        ("local_suppliers", "dealer", "manufacturer", "used", "auction", "completed_sales", "reviews",
          "issues", "specs"),
         {"b2b": "B2B marketplaces don't sell road-legal vehicles for Canada",
+         "wholesale": "vehicles aren't sold wholesale to end buyers; fleet pricing is arranged through dealers "
+                      "(searched under dealers)",
          "retail": "vehicles are sold through dealers, not retailers",
          "distributor": "vehicles are sold through dealers, not distributors"},
         high_risk=True, used_domains=tuple(VEHICLE_DOMAINS)),
@@ -210,6 +212,26 @@ def alt_spellings(name: str) -> list[str]:
     return list(dict.fromkeys(out))[:2]
 
 
+def request_variants(name: str) -> list[str]:
+    """The items an either-or request names, each searched on its own: "f250 or f350 truck" ->
+    ["f250 truck", "f350 truck"] (the trailing words go with each alternative)."""
+    parts = [p.strip() for p in re.split(r"\s+or\s+", name or "", flags=re.I) if p.strip()]
+    if len(parts) < 2:
+        return [name]
+    tail = " ".join(parts[-1].split()[1:])
+    return [p if len(p.split()) > 1 or not tail else f"{p} {tail}" for p in parts[:-1]][:2] + [parts[-1]]
+
+
+def scope_plan(plan: list["PlannedQuery"], area: str) -> list["PlannedQuery"]:
+    """Keep the searches for the area chosen: "local" (Thunder Bay only), "outside" (everywhere but Thunder Bay)
+    or "both". Review, problem and spec searches are about the item, not where it's sold, so they stay."""
+    if area == "local":
+        return [pq for pq in plan if pq.market == "local" or pq.channel in ("reviews", "issues", "specs")]
+    if area == "outside":
+        return [pq for pq in plan if pq.market != "local"]
+    return plan
+
+
 def _q(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()[:200]
 
@@ -233,7 +255,24 @@ def initial_plan(name: str, category: Category, depth: str, *, brand: str | None
         cands.append((prio, PlannedQuery(_q(query), CHANNEL_PURPOSE.get(channel, channel), country, channel, market,
                                          1, domains)))
 
-    if category.key == "property":
+    if category.key == "vehicle":
+        # vehicles are bought from dealers and private sellers: listings for each model asked for, not the
+        # wholesale/manufacturer searches used for supplies (those find parts shops)
+        variants = [_q(v) for v in request_variants(name)][:3]
+        for i, v in enumerate(variants):
+            add(1 + i * 0.1, "local_suppliers", "local", f"{v} for sale {city}", "canada")
+            add(4 + i * 0.1, "used", "canada", f"used {v} for sale Ontario", "canada", list(category.used_domains))
+            add(6 + i * 0.1, "dealer", "regional", f"{v} for sale {region} OR Winnipeg", "canada")
+            add(9 + i * 0.1, "manufacturer", "canada", f"{v} MSRP Canada build and price", "canada")
+            add(11 + i * 0.1, "auction", "canada", f"{v} auction", "canada", list(category.auction_domains))
+            add(13 + i * 0.1, "reviews", "any", f"{v} reliability review")
+            add(14 + i * 0.1, "issues", "any", f"{v} common problems recalls")
+        add(2, "local_suppliers", "local", f"{term} {city} Ontario", "canada")
+        add(3, "directory", "local", f"{term} {city}", "canada", DIRECTORY_DOMAINS)
+        add(5, "dealer", "canada", f"{variants[0]} fleet pricing Canada", "canada")
+        add(8, "used", "canada", f"{q} for sale Canada", "canada", list(category.used_domains))
+        add(12, "completed_sales", "any", f"{variants[0]} sold price")
+    elif category.key == "property":
         add(1, "property_listings", "local", f"{q} for sale {city} Ontario", "canada", PROPERTY_DOMAINS)
         add(2, "property_sales", "local", f"{q} sold {city} recent sales", "canada")
         add(3, "local_suppliers", "local", f"{term} {city}", "canada")

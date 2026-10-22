@@ -25,10 +25,12 @@ function safeUrl(u) {
   try { const x = new URL(u); return (x.protocol === "http:" || x.protocol === "https:") ? x.href : null; }
   catch { return null; }
 }
-function link(url, text, cls) {
+// `img`: the listing's picture, shown when the link is hovered or focused
+function link(url, text, cls, img) {
   const u = safeUrl(url);
   if (!u) return h("span", { class: cls }, text || url || "");
-  return h("a", { href: u, target: "_blank", rel: "noopener noreferrer", class: cls }, text || hostOf(u));
+  const pic = img && /^https?:\/\//.test(img) ? img : null;
+  return h("a", { href: u, target: "_blank", rel: "noopener noreferrer", class: cls, "data-img": pic }, text || hostOf(u));
 }
 function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } }
 async function api(path, opts = {}) {
@@ -259,8 +261,60 @@ async function clearRecent() {
   if (r.ok) renderHome();
 }
 
+// ------------------------------------------------------------------ picture preview
+// Hovering (or tabbing to) a listing link shows the listing's picture, so each one needn't be opened. The picture
+// loads straight from the seller's site; if it doesn't load, nothing is shown.
+const peek = h("div", { class: "peek", hidden: true, "aria-hidden": "true" },
+  h("img", { alt: "", referrerpolicy: "no-referrer" }), h("div", { class: "cap" }));
+document.body.append(peek);
+let peekTimer = null, peekFor = null;
+function showPeek(a) {
+  peekFor = a;
+  const img = peek.querySelector("img");
+  img.onload = () => { if (peekFor !== a) return; placePeek(a); peek.hidden = false; };
+  img.onerror = () => { peek.hidden = true; };
+  peek.querySelector(".cap").textContent = `Picture from ${hostOf(a.href)}`;
+  img.src = a.dataset.img;
+}
+function placePeek(a) {
+  const r = a.getBoundingClientRect(), w = 280, hgt = 240;
+  const left = Math.min(window.innerWidth - w - 12, Math.max(12, r.left));
+  const top = r.bottom + hgt + 12 > window.innerHeight ? Math.max(12, r.top - hgt - 8) : r.bottom + 8;
+  peek.style.left = `${left + window.scrollX}px`;
+  peek.style.top = `${top + window.scrollY}px`;
+}
+function hidePeek() { clearTimeout(peekTimer); peekFor = null; peek.hidden = true; }
+document.addEventListener("mouseover", (e) => {
+  const a = e.target.closest && e.target.closest("a[data-img]");
+  if (!a || a === peekFor) return;
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => showPeek(a), 120);
+});
+document.addEventListener("mouseout", (e) => {
+  const a = e.target.closest && e.target.closest("a[data-img]");
+  if (a && !a.contains(e.relatedTarget)) hidePeek();
+});
+document.addEventListener("focusin", (e) => { const a = e.target.closest && e.target.closest("a[data-img]"); if (a) showPeek(a); });
+document.addEventListener("focusout", (e) => { if (e.target.closest && e.target.closest("a[data-img]")) hidePeek(); });
+window.addEventListener("scroll", () => { if (!peek.hidden) hidePeek(); }, { passive: true });  // it would float off its link
+
 // ------------------------------------------------------------------ search flow
 $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); startResearch(); });
+
+// Where to look: Thunder Bay, outside it, or both. At least one stays on; the choice is remembered on this computer.
+function currentArea() {
+  const l = $("#area-local").checked, o = $("#area-outside").checked;
+  return l && o ? "both" : l ? "local" : "outside";
+}
+function setArea(area) {
+  $("#area-local").checked = area !== "outside";
+  $("#area-outside").checked = area !== "local";
+}
+try { const saved = localStorage.getItem("pi-area"); if (saved) setArea(saved); } catch { /* storage unavailable */ }
+["#area-local", "#area-outside"].forEach((sel) => $(sel).addEventListener("change", (e) => {
+  if (!$("#area-local").checked && !$("#area-outside").checked) e.target.checked = true;  // keep one on
+  try { localStorage.setItem("pi-area", currentArea()); } catch { /* storage unavailable */ }
+}));
 $("#photo").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) searchByPhoto(f); });
 
 // Search by photo: the page shrinks the photo (Claude reads up to about 1,600 px, and it uploads faster), the app
@@ -340,7 +394,8 @@ async function startResearch(opts = {}) {
       return;
     }
   }
-  const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty,
+  const area = opts.area || currentArea();
+  const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty, area,
     force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || null }) });
   if (r.status === 503) { flash(setupNotice(r.body?.setup)); return; }
   if (r.status === 402) {
@@ -498,12 +553,13 @@ function header(comp, res) {
         "Last researched ", h("span", { class: "when" }, when(comp.last_researched_at)), ` (${ago(comp.last_researched_at)}). `,
         id.input_type === "url" ? ["From your link, identified via ", id.source, ". "] : null,
         id.model_tokens?.length ? `Model number matched: ${id.model_tokens.join(", ")}. ` : "No model number given, so equivalence isn't verified. ",
-        res.quantity ? `Quantity: ${res.quantity}.` : ""),
+        res.quantity ? `Quantity: ${res.quantity}. ` : "",
+        res.area === "local" ? "Searched in Thunder Bay only." : res.area === "outside" ? "Searched outside Thunder Bay only." : ""),
       h("details", { class: "legend-box" }, h("summary", {}, "How to read the price marks"), legend())),
     h("div", { class: "actions" },
       saveBtn,
       h("button", { class: "btn", type: "button", title: "Runs a new search and adds new price observations (uses credits)",
-        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null, answers: res.answers || {} }) }, "Search again"),
+        onclick: () => startResearch({ query: comp.query, depth: res.depth, comparisonId: comp.id, quantity: res.quantity ?? null, answers: res.answers || {}, area: res.area || "both" }) }, "Search again"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.csv` }, "Export CSV"),
       h("a", { class: "btn", href: `/api/comparisons/${comp.id}/export.xlsx` }, "Export Excel")));
 }
@@ -529,7 +585,7 @@ function recCard(kind, rec, res, offersById) {
     rec.order_total_cad != null ? h("div", { class: "small" }, `For ${rec.order_length}: about `,
       h("b", {}, money(rec.order_total_cad, "CAD")), " ", mark("calculated"), " before tax and shipping") : null,
     h("div", { class: "who" }, rec.supplier, " ", h("span", { class: "sub" }, `${o.supplier_type || ""}, ${country(o.country)}`)),
-    h("div", { class: "small" }, link(rec.url, "Open listing"), ` (observed ${when(o.observed_at)})`),
+    h("div", { class: "small" }, link(rec.url, "Open listing", null, o.image), ` (observed ${when(o.observed_at)})`),
     h("ul", { class: "why" }, rec.explanation.map((e) => h("li", {}, e))),
     (o.flags || []).length ? h("div", { class: "small", style: "margin-top:10px" },
       h("b", {}, "Check before ordering: "), o.flags.slice(0, 3).join(" ")) : null,
@@ -579,7 +635,7 @@ function leadCard(plain, res) {
     return h("section", { class: `lead none${state.entering ? " enter" : ""}` }, h("div", { class: "kind stamp" }, options ? "Shortlist - pick a model first" : "For you to judge"),
       h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
-      pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier), p.local ? " (Thunder Bay)" : "",
+      pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier, null, p.image), p.local ? " (Thunder Bay)" : "",
         `: ${p.title}`, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
         h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
       h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
@@ -605,7 +661,7 @@ function leadCard(plain, res) {
         row.total_pre_tax != null ? h("div", { class: "small" }, `${money(row.total_pre_tax, "CAD")} before tax`,
           res.quantity ? ` for ${res.quantity}` : "", row.total_complete ? "" : ", some costs unknown") : null) : null),
     h("div", { class: "next" },
-      h("a", { class: "btn primary", href: plain.lead.url, target: "_blank", rel: "noopener" }, "Open listing"),
+      h("a", { class: "btn primary", href: plain.lead.url, target: "_blank", rel: "noopener", "data-img": row.image || null }, "Open listing"),
       phone ? h("a", { class: "btn", href: telHref(phone) }, `Call ${phone}`) : null,
       h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")),
     h("ul", { class: "why" }, plain.lead.why.map((w) => h("li", {}, w))),
@@ -636,7 +692,7 @@ function picksTable(plain) {
         h("th", {}, "Compatibility"), h("th", {}, "Risks"))),
       h("tbody", {}, rows.map((r) => h("tr", {},
         h("td", {}, r.labels.map((l, i) => [i ? h("br") : null, h("b", {}, l)])),
-        h("td", {}, link(r.url, r.supplier), r.tier ? h("div", { class: "sub" }, r.tier) : null),
+        h("td", {}, link(r.url, r.supplier, null, r.image), r.tier ? h("div", { class: "sub" }, r.tier) : null),
         h("td", { class: "r num" }, r.price || "n/a"),
         h("td", { class: "r num" }, r.total_pre_tax != null ? [money(r.total_pre_tax, "CAD"), " ", mark("calculated"),
           r.total_complete ? null : h("div", { class: "sub" }, `excludes ${r.total_unknown.join(", ")}`)] : "n/a"),
@@ -729,7 +785,7 @@ function offerRow(o, res, colCount) {
       o.warranty ? h("div", {}, o.warranty) : null,
       o.moq ? h("div", {}, o.moq) : null,
       o.rating ? h("div", {}, `${o.rating.value}/${o.rating.best || 5} (${o.rating.count ?? "?"} ratings)`) : null),
-    td({ "data-label": "Evidence" }, link(o.url, "Open"), h("div", { class: "sub" }, day(o.observed_at)),
+    td({ "data-label": "Evidence" }, link(o.url, "Open", null, o.image), h("div", { class: "sub" }, day(o.observed_at)),
       o.flags.length ? h("div", { class: "flagcount" }, `${o.flags.length} flag${o.flags.length > 1 ? "s" : ""}`) : null),
     h("td", { class: "toggle-cell" }, btn));
   const detail = h("tr", { class: "detail", hidden: true }, h("td", { colspan: colCount }, offerDetail(o, res)));
@@ -1054,7 +1110,7 @@ function importTab(res) {
         h("thead", {}, h("tr", {}, h("th", {}, "Supplier"), h("th", {}, "Country"), h("th", { class: "r" }, "Listed"),
           h("th", { class: "r" }, "In CAD"), h("th", { class: "r" }, "Landed estimate"), h("th", {}, "Not included"))),
         h("tbody", {}, intl.map((o) => h("tr", {},
-          h("td", {}, link(o.url, o.supplier)), h("td", {}, `${country(o.country)}`),
+          h("td", {}, link(o.url, o.supplier, null, o.image)), h("td", {}, `${country(o.country)}`),
           h("td", { class: "r num" }, money(o.price, o.currency) + (o.price_high ? `–${Number(o.price_high).toFixed(2)}` : "")),
           h("td", { class: "r num" }, o.price_cad != null ? [money(o.price_cad, "CAD"), " ", mark("calculated")] : "no FX rate"),
           h("td", { class: "r num" }, o.delivered ? [money(o.delivered.value, "CAD"), " ", mark(o.delivered.label === "estimated" ? "estimated" : "calculated")] : "n/a"),

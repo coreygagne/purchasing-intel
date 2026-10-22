@@ -159,8 +159,19 @@ def _split_model(token: str) -> tuple[str, str | None]:
     return re.sub(r"[^a-z0-9]", "", t), None
 
 
-def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
-    """Compare an offer's text with the requested model numbers."""
+def alternative_models(request: str, tokens: list[str]) -> bool:
+    """True when the request names model numbers as alternatives ("f250 or f350", "F250/F350"): a listing
+    naming any one of them is the item asked for."""
+    if len(tokens) < 2:
+        return False
+    low = (request or "").lower()
+    return any(re.search(re.escape(a.lower()) + r"\s*(?:\bor\b|/|,)\s*" + re.escape(b.lower()), low)
+               for a, b in zip(tokens, tokens[1:]))
+
+
+def match_offer(target_tokens: list[str], offer_text: str, any_of: bool = False) -> MatchResult:
+    """Compare an offer's text with the requested model numbers. `any_of`: the request names them as
+    alternatives, so naming one is enough."""
     if not target_tokens:
         return MatchResult("unverified", ["No model number in the request - equivalence must be checked against specs."])
     text = _norm_text(offer_text)
@@ -172,7 +183,9 @@ def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
         if len(parts) == 1 and suffix:
             parts = [base, suffix]
         pattern = r"\s" + r"\s?".join(re.escape(p) for p in parts) + r"\s"
-        if re.search(pattern, text) or (len(full) >= 6 and f" {full} " in text):
+        # letters and digits may be split in the listing: "f250" is written "F-250" or "F 250"
+        runs = r"\s" + r"\s?".join(re.escape(p) for p in re.findall(r"[a-z]+|\d+", full)) + r"\s"
+        if re.search(pattern, text) or re.search(runs, text) or (len(full) >= 6 and f" {full} " in text):
             exact.append(tok)
             continue
         # base found with a different suffix -> a different kit / variant
@@ -187,6 +200,8 @@ def match_offer(target_tokens: list[str], offer_text: str) -> MatchResult:
                 variants.append(f"Base model {base.upper()} found but suffix '{suffix.upper()}' not confirmed")
                 continue
         missing.append(tok)
+    if any_of and exact:
+        missing, variants = [], []  # one of the alternatives asked for is enough
     if exact and not variants and not missing:
         compat = _compat_phrase(exact, offer_text)
         if compat:
@@ -237,6 +252,28 @@ def requested_model_year(text: str) -> int | None:
     """The one model year a request names ("2019 Ford F-150 pickup"); None when it names none or several."""
     years = model_years(text)
     return years[0] if len(years) == 1 else None
+
+
+# Parts and accessories sold "for" a vehicle: in a vehicle search they mention the model but aren't the vehicle
+_VEHICLE_PART = re.compile(
+    r"\b(?:lift|leveling|levelling|suspension|lowering) (?:kit|system)s?\b|\bkits?\b|\bbumpers?\b|\bfender|\bflares?\b|"
+    r"\bsuspension\b|\bshocks?\b|\bstruts?\b|\b(?:radius|control) arms?\b|\bbushings?\b|\bgrilles?\b|\bheadlights?\b|"
+    r"\btail ?lights?\b|\blight bars?\b|\bbulbs?\b|\bmirrors?\b|\bfloor (?:mats?|liners?)\b|\btonneau\b|\bbed covers?\b|"
+    r"\bseat covers?\b|\bhitch(?:es)?\b|\bwheels?\b|\brims?\b|\btires?\b|\btyres?\b|\bexhaust\b|\btuners?\b|"
+    r"\binjectors?\b|\bturbo(?:chargers?)?\b|\bfilters?\b|\bbrakes?\b|\brotors?\b|\bcalipers?\b|\bparts?\b|"
+    r"\baccessor(?:y|ies)\b|\bgauges?\b|\bcluster\b|\bantennas?\b|\bdecals?\b|\bemblems?\b|\brunning boards?\b|"
+    r"\bnerf bars?\b|\bwinch(?:es)?\b|\bwipers?\b|\balternators?\b|\bradiators?\b|\btailgate\b|\bgaskets?\b", re.I)
+# a whole vehicle's ad: starts with one model year, or states mileage, or says it's for sale
+_VEHICLE_AD = re.compile(r"^\W*(?:19|20)\d\d\b(?!\s*[-–/]\s*(?:19|20)?\d\d)|\b\d[\d,]*\s?(?:km|kms|miles)\b|"
+                         r"\bfor sale\b|\b(?:crew|super) ?cab\b|\bsupercrew\b", re.I)
+
+
+def vehicle_part(title: str) -> str | None:
+    """The words showing a listing is a part or accessory for a vehicle ("lift kit", "bumper"), or None."""
+    m = _VEHICLE_PART.search(title or "")
+    if not m or _VEHICLE_AD.search(title or ""):
+        return None
+    return m.group(0)
 
 
 def detect_condition(text: str) -> str | None:
@@ -710,6 +747,34 @@ def _parse_offer(o: dict[str, Any]) -> StructuredOffer | None:
         sku=str(o.get("sku")) if o.get("sku") else None,
         name=o.get("name") if isinstance(o.get("name"), str) else None,
     )
+
+
+def page_image(html: str, base_url: str) -> str | None:
+    """The page's main picture, for a preview: the schema.org Product image, else the Open Graph or Twitter
+    card image. Only an absolute http(s) address is returned."""
+    from urllib.parse import urljoin
+    candidates: list[str] = []
+    for block in jsonld_blocks(html):
+        for node in _walk(block):
+            if isinstance(node, dict) and {"Product", "ProductModel", "IndividualProduct", "Car", "Vehicle"} & _types(node):
+                img = node.get("image")
+                if isinstance(img, list):
+                    img = img[0] if img else None
+                if isinstance(img, dict):
+                    img = img.get("url") or img.get("contentUrl")
+                if isinstance(img, str):
+                    candidates.append(img)
+    soup = BeautifulSoup(html, "html.parser")
+    for attrs in ({"property": "og:image"}, {"name": "og:image"}, {"name": "twitter:image"},
+                  {"property": "twitter:image"}):
+        tag = soup.find("meta", attrs=attrs)
+        if tag is not None and tag.get("content"):
+            candidates.append(str(tag["content"]))
+    for c in candidates:
+        url = urljoin(base_url, c.strip())
+        if re.match(r"https?://[^\s\"'<>]+$", url) and len(url) <= 1000:
+            return url
+    return None
 
 
 def structured_products(html: str) -> list[StructuredProduct]:

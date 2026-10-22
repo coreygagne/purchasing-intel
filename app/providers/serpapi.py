@@ -90,7 +90,8 @@ class SerpApiProvider:
                 reviews=int(r["reviews"]) if isinstance(r.get("reviews"), (int, float)) else None,
                 delivery=r.get("delivery") if isinstance(r.get("delivery"), str) else None,
                 condition=r.get("second_hand_condition") if isinstance(r.get("second_hand_condition"), str) else None,
-                extra={"direct_link": bool(r.get("link")), "tag": r.get("tag")},
+                extra={"direct_link": bool(r.get("link")), "tag": r.get("tag"),
+                       "thumbnail": r.get("thumbnail") if isinstance(r.get("thumbnail"), str) else None},
             ))
         return out
 

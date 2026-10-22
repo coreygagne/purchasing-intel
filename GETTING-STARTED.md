@@ -122,6 +122,12 @@ label or nameplate. The app reads what it can and suggests a search; check it, e
 **Research this**. Reading a photo uses the Anthropic key and costs a fraction of a cent to a few cents. **Try Google
 Lens** opens Lens if you'd rather search visually.
 
+Next to Quick / Standard / Deep, **In Thunder Bay** and **Outside Thunder Bay** choose where to look. Both are on
+by default; turn one off to search only in town or only outside it.
+
+Links with a small frame mark show the listing's picture when you point at them, so you don't have to open each
+one (on a computer; phones have no hover).
+
 To tidy the home page, **Clear list** next to Recent searches clears that list (saved comparisons are kept).
 
 For vehicles, equipment, property and used items, the app doesn't pick a "best price": it lists the listing

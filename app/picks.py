@@ -51,7 +51,7 @@ def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: i
     if o.price_kind == "current_bid":
         risks.append("auction in progress: final price will be higher, plus buyer's fees")
     return {
-        "offer_id": o.id, "labels": labels, "supplier": o.supplier, "url": o.url,
+        "offer_id": o.id, "labels": labels, "supplier": o.supplier, "url": o.url, "image": o.image,
         "tier": vendor["tier_label"] if vendor else None,
         "price": fmt_money(o.price, o.currency) if o.price is not None else None,
         "compare_value": o.compare_value,
@@ -155,7 +155,7 @@ def recommend_plainly(offers: list[Offer], vendors: list[dict[str, Any]], rec: d
             why.append("Risks: " + "; ".join(row["risks"]) + ".")
         lead = {"offer_id": best.id, "supplier": best.supplier, "url": best.url, "why": why}
 
-    pages = listing_pages(offers, vendor_of, options=judge == "shortlist")
+    pages = listing_pages(offers, vendor_of, options=bool(judge))
     needed = _needed(rec, lowest, best, vendors, rows, order_length, pages, judge)
     return {"lead": lead, "picks": {k: o.id for k, o in picks.items()}, "comparison": list(rows.values()),
             "judge": judge, "judge_note": rec["notes"][-1] if judge and rec.get("notes") else None,
@@ -199,9 +199,13 @@ def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
     """Pages to open and judge by eye: pages listing many ads or products, and classified/auction ads; with
     `options`, also every listing that passed the comparison checks. Local first."""
     out, seen = [], set()
-    pool = [o for o in offers if o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)
-            or (options and o.comparable)]
-    pool.sort(key=lambda o: ((vendor_of.get(o.id) or {}).get("tier") != "local", o.price is None))
+    pool = [o for o in offers if (o.page_kind == "results" or (o.supplier_type in _AD_TYPES and not o.page_kind)
+                                  or (options and o.comparable))
+            # only pages about the item asked for: not another model, a part for it or a different variant
+            and o.match_level not in ("different", "compatible", "variant") and not o.spec_conflicts]
+    # local first, then single listings with a price, then pages of many ads
+    pool.sort(key=lambda o: ((vendor_of.get(o.id) or {}).get("tier") != "local", o.page_kind == "results",
+                             o.price is None))
     for o in pool:
         if o.url in seen or o.superseded() or is_non_commercial(o.supplier_domain):
             continue
@@ -209,9 +213,16 @@ def listing_pages(offers: list[Offer], vendor_of: dict[str, dict[str, Any]],
         asking = o.price_type == "listed" and o.price_kind != "completed_sale"
         out.append({"offer_id": o.id, "supplier": o.supplier, "url": o.url, "title": o.product_title,
                     "price": o.price if asking else None, "currency": o.currency, "price_kind": o.price_kind,
-                    "many": o.page_kind == "results", "observed_at": o.observed_at,
+                    "many": o.page_kind == "results", "observed_at": o.observed_at, "image": o.image,
                     "local": (vendor_of.get(o.id) or {}).get("tier") == "local"})
-    return out[:8]
+    asked = sorted(p["price"] for p in out if p["price"] is not None and p["price_kind"] == "asking")
+    if len(asked) >= 3:
+        mid = asked[len(asked) // 2]
+        for p in out:
+            if p["price"] is not None and p["price_kind"] == "asking" and p["price"] < mid * 0.01:
+                p["price"] = None  # a hundredth of the others: a misread number, not an asking price (old or
+                # worn items can legitimately be cheap, so only the absurd is hidden)
+    return out[:12]
 
 
 def _needed(rec: dict[str, Any], lowest: Offer | None, best: Offer | None, vendors: list[dict[str, Any]],
