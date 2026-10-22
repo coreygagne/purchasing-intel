@@ -21,6 +21,7 @@ from . import analysis as an
 from . import discovery as disc
 from . import extract as ex
 from . import market as mk
+from . import guides
 from . import vendors as vd
 from .coverage import coverage_report
 from .picks import recommend_plainly
@@ -893,6 +894,7 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
         "import_notes": general_notes(home_province),
         "import_checklist": checklist,
         "compliance": compliance,
+        "guide": guides.public(name),
         "import_links": LINKS,
         "conflicts": conflicts,
         "gaps": gaps,

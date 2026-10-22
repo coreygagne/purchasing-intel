@@ -322,6 +322,17 @@ footer.foot { margin: 40px 0 30px; color: var(--ink-3); font-size: 13px; }
 
 /* ------------------------------------------------------------ clarify, lead, suppliers */
 form.clarify { display: grid; gap: 12px; }
+.guide { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); padding: 14px 16px; }
+.guide .kind { font-weight: 700; font-size: 15px; }
+.guide .types { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.guide .type { display: grid; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--rule-strong);
+  border-radius: var(--radius); background: var(--paper); color: var(--ink); cursor: pointer; font: inherit;
+  transition: border-color .15s ease, transform .15s ease; }
+.guide .type:hover { border-color: var(--lake); transform: translateY(-1px); }
+.guide .type:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.guide .type .go { color: var(--lake); font-weight: 600; }
+.guide .hazard { background: var(--risk-bg); color: var(--ink); border-left: 3px solid var(--risk); padding: 6px 10px; margin: 8px 0 0; }
+@media (prefers-reduced-motion: reduce) { .guide .type { transition: none; } .guide .type:hover { transform: none; } }
 form.clarify .cq { display: grid; gap: 5px; max-width: 640px; }
 form.clarify .qt { font-weight: 650; }
 form.clarify input[type="text"], form.clarify input[type="number"] {

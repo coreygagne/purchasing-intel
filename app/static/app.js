@@ -259,7 +259,11 @@ async function startResearch(opts = {}) {
   if (!opts.answers && !opts.comparisonId) {
     // clarify first: a few optional questions, only when the answer would change the results (free, no search)
     const c = await api("/api/clarify", { method: "POST", body: JSON.stringify({ query, quantity: qty }) });
-    if (c.ok && c.body.questions.length) { flash(clarifyCard(c.body, (answers) => startResearch({ ...opts, query, depth, quantity: qty, answers }))); return; }
+    if (c.ok && (c.body.questions.length || c.body.guide?.broad)) {
+      flash(clarifyCard(c.body, (answers) => startResearch({ ...opts, query, depth, quantity: qty, answers }),
+        (term) => { $("#q").value = term; startResearch({ ...opts, query: term, depth, quantity: qty }); }));
+      return;
+    }
   }
   const r = await api("/api/research", { method: "POST", body: JSON.stringify({ query, depth, quantity: qty,
     force: !!opts.force, comparison_id: opts.comparisonId ?? null, answers: opts.answers || null }) });
@@ -285,11 +289,12 @@ async function startResearch(opts = {}) {
 function flash(node) { $("#flash").replaceChildren(...(node ? [node] : [])); }
 
 // Optional questions before searching. Blank = skipped; the research states what it assumed instead.
-function clarifyCard(cq, go) {
+function clarifyCard(cq, go, pick) {
   const inputs = {};
   const known = Object.entries(cq.known || {}).filter(([, v]) => v !== null && v !== "");
   const form = h("form", { class: "clarify", onsubmit: (e) => { e.preventDefault(); go(collect()); } },
-    h("h3", {}, "A few questions first (all optional)"),
+    cq.guide ? guideCard(cq.guide, pick) : null,
+    h("h3", {}, cq.guide?.broad ? "Or search as typed - a few questions first (all optional)" : "A few questions first (all optional)"),
     h("p", { class: "small muted", style: "margin:0 0 10px" }, cq.note),
     cq.questions.map((q) => {
       let input;
@@ -319,6 +324,20 @@ function clarifyCard(cq, go) {
     return out;
   }
   return h("div", { class: "notice info" }, form);
+}
+
+// Built-in buying guide for a broad term ("radios"): the main types (pick one to search for it), what to confirm
+// with the supplier, and safety flags. General guidance, labelled as such - never search results.
+function guideCard(g, pick) {
+  return h("section", { class: "guide" },
+    h("div", { class: "kind" }, g.broad ? `${g.title}: which type do you need?` : g.title),
+    h("p", { style: "margin:2px 0 10px" }, g.intro),
+    g.broad && pick ? h("div", { class: "types" }, g.types.map((t) => h("button", { class: "type", type: "button", onclick: () => pick(t.search) },
+      h("b", {}, t.name), h("span", { class: "small muted" }, t.for), h("span", { class: "go small" }, `Search for “${t.search}” →`)))) : null,
+    h("details", { open: !g.broad }, h("summary", { class: "small" }, "What to confirm with the supplier"),
+      h("ul", { class: "bullets small" }, g.checklist.map((c) => h("li", {}, c)))),
+    g.hazard ? h("p", { class: "small hazard" }, h("b", {}, "Safety: "), g.hazard) : null,
+    h("p", { class: "small muted", style: "margin:6px 0 0" }, g.label));
 }
 
 function trackJob(jobId, query) {
@@ -456,6 +475,7 @@ function keyFindings(res, offersById) {
   const opp = [...(plain?.needed || []), ...(res.opportunities || [])];
   return h("div", { class: "stack" },
     plain ? leadCard(plain, res) : null,
+    res.guide ? guideCard(res.guide, (term) => { $("#q").value = term; startResearch({ query: term }); }) : null,
     plain?.judge ? null : h("div", { class: "recs" }, recCard("lowest", rec.lowest, res, offersById), recCard("value", rec.best_value, res, offersById)),
     plain && plain.comparison.length ? picksTable(plain) : null,
     res.market_value ? marketPanel(res.market_value) : null,

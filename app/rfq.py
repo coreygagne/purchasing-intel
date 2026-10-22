@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import quote
 
 from . import discovery as disc
+from . import guides
 
 MAX_DRAFTS = 8
 SKIP_TYPES = {"marketplace", "business directory", "auction / surplus", "property listings", "classifieds / used"}
@@ -32,6 +33,8 @@ def rfq_drafts(vendors: list[dict[str, Any]], identity: dict[str, Any], quantity
         qty = "please quote your standard unit / pack size"
     needed_by = answers.get("needed_by")
     use = answers.get("intended_use")
+    reqs = guides.requirements(identity.get("name") or "", answers)
+    guide = guides.match(identity.get("name") or "")
     cert = _cert_line(category)
     targets = [v for v in vendors if v["quote_opportunity"] and v["type"] not in SKIP_TYPES]
     drafts = []
@@ -47,6 +50,7 @@ def rfq_drafts(vendors: list[dict[str, Any]], identity: dict[str, Any], quantity
         lines.append(f"  Delivery: to {disc.HOME['city']}, ON" + (f", needed by {needed_by}" if needed_by else ""))
         if use:
             lines.append(f"  Intended use: {use}")
+        lines += [f"  {r}" for r in reqs]
         lines += ["", "Please include:",
                   "  - unit price and total in CAD, before tax",
                   "  - any trade, contractor or volume pricing, and the minimum order",
@@ -54,6 +58,8 @@ def rfq_drafts(vendors: list[dict[str, Any]], identity: dict[str, Any], quantity
                   "  - warranty terms"]
         if cert:
             lines.append(f"  - {cert}")
+        if guide:
+            lines += ["", "Please also confirm:"] + [f"  - {c}" for c in guide[0]["checklist"]]
         lines += ["", "Thank you,", "[Your name]", disc.HOME["company"], "[Phone]"]
         subject = f"Request for quote: {item}"[:150]
         body = "\n".join(lines)

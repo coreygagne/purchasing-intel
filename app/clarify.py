@@ -12,6 +12,7 @@ from typing import Any
 
 from . import discovery as disc
 from . import extract as ex
+from . import guides
 
 MAX_QUESTIONS = 4
 _LENGTH_ITEM = re.compile(r"\b(cable|wire|teck|cord|conductor|rope|chain|hose|tubing|conduit)\b", re.I)
@@ -49,7 +50,9 @@ def all_questions(query: str, quantity: int | None = None) -> list[dict[str, Any
     elif not quantity and not ex.pack_quantity(name):
         out.append(_q("quantity", "How many do you need?", "Totals, minimum orders and volume pricing depend on it.",
                       kind="number", placeholder="e.g. 10"))
-    if not is_url and not tokens and len(words) <= 2 and cat.key != "property":
+    guided = guides.questions(name) if not is_url and not tokens else []
+    out += guided  # broad terms with a built-in guide ("radios"): the questions that change the answer
+    if not is_url and not tokens and len(words) <= 2 and cat.key != "property" and not guided:
         out.append(_q("specifics", "Which exact item? Add the type, size, rating, brand or model, or paste a link.",
                       "A short description matches many different items; details keep unrelated results out.",
                       placeholder="e.g. 3/4 in drive, 1,000 ft-lb"))
@@ -82,7 +85,9 @@ def questions(query: str, quantity: int | None = None, known: dict[str, Any] | N
     """Questions not yet answered (or skipped) for this request, at most MAX_QUESTIONS."""
     known = known or {}
     pending = [q for q in all_questions(query, quantity) if q["id"] not in known]
+    guide = guides.public(query) if ex.classify_input(query) != "url" else None
     return {"key": key_for(query), "category": disc.categorize(query).label, "questions": pending[:MAX_QUESTIONS],
+            "guide": guide,
             "known": known, "note": "Every question is optional. Skip any and the research says what it assumed."}
 
 
@@ -160,6 +165,9 @@ def apply_answers(query: str, answers: dict[str, Any] | None, quantity: int | No
         a.append("Short description: results may include different types or sizes of the item.")
     if "budget_cad" in asked and raw.get("budget_cad") is None:
         a.append("No budget given: the search depth is based on the prices found.")
+    if "g_hazardous" in asked and raw.get("g_hazardous") in (None, "Not sure"):
+        a.append("Hazardous areas not confirmed: if any area is classified, the equipment needs certification for "
+                 "it - check with your safety lead before ordering.")
     if raw.get("needed_by") is None and "needed_by" in asked:
         a.append("No deadline given: delivery times are shown but don't rule anything out.")
     return out
