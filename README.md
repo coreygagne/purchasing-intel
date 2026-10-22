@@ -432,6 +432,14 @@ aren't. The changes:
   five priced options with the checklist in 8 quote drafts; it first listed "Canadian Tire Roadside
   Assistance" as an option, so shortlist options must now name the product type. Saved earlier runs re-analysed under
   the new rules: no loss of comparable prices for exact-model items.
+- **Search by photo** (with the Anthropic key): the page shrinks the photo, Claude reads what it shows and the
+  text printed on its label or nameplate, and you confirm or edit the suggested search before anything is
+  searched. A brand or model number is kept only if it's in the text read from the photo. The photo goes only
+  to Anthropic and isn't stored; each reading's cost counts in the month's spend. "Try Google Lens" opens Lens
+  in a new tab to upload the photo yourself (Lens can't be connected directly: its API needs the photo posted
+  publicly online first).
+- **Recent searches** can be cleared from the home page; saved comparisons, price history and the month's
+  spend record are kept.
 - **Out of scope on purpose:** price ranking for vehicles and property, worldwide coverage, deeper import
   modelling, dashboards and forecasting.
 

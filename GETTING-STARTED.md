@@ -117,6 +117,13 @@ Not sure exactly what you need? Type a broad term such as `radios`, `work lights
 `safety glasses`. The app shows the main types and what each is for; click one to search for it. Its
 checklist (labelled general guidance) goes into your quote requests.
 
+Have the item in front of you? Click **Photo** (next to Research) and choose a photo of it, ideally showing the
+label or nameplate. The app reads what it can and suggests a search; check it, edit it if needed, then click
+**Research this**. Reading a photo uses the Anthropic key and costs a fraction of a cent to a few cents. **Try Google
+Lens** opens Lens if you'd rather search visually.
+
+To tidy the home page, **Clear list** next to Recent searches clears that list (saved comparisons are kept).
+
 For vehicles, equipment, property and used items, the app doesn't pick a "best price": it lists the listing
 pages and local dealers for you to compare, because condition and options matter more than the asking price.
 

@@ -163,3 +163,37 @@ def test_verdict_shows_price_and_next_step(servers, browser):
     page.click(".lead >> text=Suppliers & quote drafts")
     assert page.inner_text(".tabs [aria-selected=true]") == "Suppliers & quotes"
     page.close()
+
+
+def _png(path, w=40, h=30):
+    import struct
+    import zlib
+    rows = b"".join(b"\x00" + b"\x80\x40\x20" * w for _ in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)  # noqa: E731
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+    return path
+
+
+def test_photo_without_ai_key_offers_google_lens(servers, browser, tmp_path):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(servers["ready"])
+    page.set_input_files("#photo", str(_png(tmp_path / "nameplate.png")))
+    page.wait_for_selector("text=Photo not read")
+    assert "Anthropic key" in page.inner_text("#flash")
+    assert page.get_attribute("#flash a:has-text('Try Google Lens')", "href").startswith("https://lens.google.com")
+    assert errors == []
+    page.close()
+
+
+def test_clear_recent_searches(servers, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(servers["ready"])
+    page.wait_for_selector("button:has-text('Clear list')")
+    page.once("dialog", lambda d: d.accept())
+    page.click("button:has-text('Clear list')")
+    page.wait_for_selector("text=Your searches will appear here.")
+    assert "TX-4400 for maintenance shop" in page.inner_text(".home-lists")  # saved comparisons stay
+    page.close()

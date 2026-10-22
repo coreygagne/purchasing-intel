@@ -32,6 +32,13 @@
           <label class="sr-only" for="q">Product, model, description or URL</label>
           <input id="q" name="q" type="text" maxlength="600"
                  placeholder="e.g. Milwaukee 2767-20, 3M 8210 respirator, 12/3 outdoor extension cord 50 ft, or a link">
+          <label class="photo-btn" title="Search by photo: the app reads the label or nameplate">
+            <input type="file" id="photo" accept="image/*" class="sr-only">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/>
+              <circle cx="12" cy="13" r="3.5"/></svg>
+            <span>Photo</span>
+          </label>
           <button class="btn primary" type="submit" id="search-btn">Research</button>
         </div>
         <div class="options">

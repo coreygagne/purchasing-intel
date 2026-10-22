@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 import re
 import uuid
@@ -24,6 +26,7 @@ from .config import Settings, load_settings, save_env_values
 from .costs import PRICES_CHECKED, PRICES_PER_MTOK, estimate_usd
 from .db import Database, iso
 from .export import comparison_xlsx, offers_csv
+from .llm import LlmError
 from .providers import SETUP_INSTRUCTIONS, provider_status
 from .research import ANALYSIS_VERSION, ResearchEngine, ResearchError, ResearchRequest, observation_rows, reanalyze
 
@@ -39,6 +42,16 @@ class ResearchBody(BaseModel):
     comparison_id: int | None = None
     # answers to the clarifying questions; None = skipped. Stored, and merged with earlier answers.
     answers: dict[str, str | int | float | bool | None] | None = None
+
+
+class PhotoBody(BaseModel):
+    # a data URL from the browser ("data:image/jpeg;base64,..."), already shrunk to about 1600 px by the page
+    image: str = Field(min_length=20, max_length=8_000_000)
+
+
+PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+PHOTO_MAX_BYTES = 4_500_000  # under the API's 5 MB per-image limit
+GOOGLE_LENS = "https://lens.google.com/"
 
 
 class ClarifyBody(BaseModel):
@@ -189,6 +202,38 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         """Questions worth answering before this research (rules only - no search, no AI, no cost)."""
         query = body.query.strip()
         return cl.questions(query, body.quantity, db.get_answers(cl.key_for(query)))
+
+    @app.post("/api/photo")
+    async def read_photo(body: PhotoBody):
+        """What a photo shows and a search for it, read by Claude. The photo goes only to Anthropic and isn't
+        stored. Nothing is searched until the person confirms or edits the suggestion."""
+        lens = {"google_lens": GOOGLE_LENS}
+        if engine.llm is None:
+            return JSONResponse(status_code=503, content={
+                "error": "no_ai", **lens, "message": "Reading a photo needs the Anthropic key (Data sources > Add "
+                                                     "or change API keys). You can still try Google Lens."})
+        m = re.fullmatch(r"data:(image/[a-z+]+);base64,([A-Za-z0-9+/=\s]+)", body.image.strip())
+        if not m or m.group(1) not in PHOTO_TYPES:
+            raise HTTPException(400, "Use a JPEG, PNG, WebP or GIF photo.")
+        try:
+            raw = base64.b64decode(m.group(2), validate=False)
+        except (binascii.Error, ValueError):
+            raise HTTPException(400, "That photo couldn't be read. Try taking it again.") from None
+        if len(raw) > PHOTO_MAX_BYTES:
+            raise HTTPException(413, "That photo is too large (over 4.5 MB). Try a smaller one.")
+        if settings.monthly_budget_usd > 0 and db.month_spend() >= settings.monthly_budget_usd:
+            return JSONResponse(status_code=402, content={"error": "budget", **lens,
+                                                          "message": "This month's AI spending limit is reached."})
+        try:
+            found = await engine.llm.identify_photo(m.group(1), base64.b64encode(raw).decode())
+        except LlmError as exc:
+            return JSONResponse(status_code=502, content={"error": "ai", **lens,
+                                                          "message": f"The photo couldn't be read: {exc}."})
+        usage = found.pop("_usage", None)
+        cost = estimate_usd({"llm_usage": {"photo": usage}})
+        db.record_spend(f"Photo: {found['what'] or 'unidentified item'}"[:200], "photo", cost)
+        return {**found, **lens, "cost_usd": cost,
+                "label": "AI reading of your photo - check it, and edit the search if needed, before searching."}
 
     @app.post("/api/research")
     async def start_research(body: ResearchBody):
@@ -344,6 +389,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return price_history(db.observations(product_key=comp["product_key"]) if comp.get("product_key") else [])
 
     # ---------------------------------------------------------------- searches
+    @app.delete("/api/searches/recent")
+    def clear_recent() -> dict[str, Any]:
+        """Clears the recent-searches list (saved comparisons and price history are kept)."""
+        return {"cleared": db.clear_recent_searches()}
+
     @app.get("/api/searches/recent")
     def recent(limit: int = 20) -> list[dict[str, Any]]:
         return db.recent_searches(min(limit, 100))

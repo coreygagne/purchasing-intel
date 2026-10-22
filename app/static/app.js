@@ -234,7 +234,8 @@ async function renderHome() {
       savedList.length ? savedList.map((c) => h("a", { class: "listlink", href: `#/c/${c.id}` },
         h("span", { class: "t" }, c.title), h("span", { class: "d" }, `researched ${day(c.last_researched_at)}`)))
         : h("p", { class: "empty" }, "Nothing saved yet. Open a comparison and choose Save to keep it here.")),
-    h("section", { class: "panel" }, h("h2", {}, "Recent searches"),
+    h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", {}, "Recent searches"),
+      recentList.length ? h("button", { class: "btn small", type: "button", onclick: clearRecent }, "Clear list") : null),
       recentList.length ? recentList.map((s) => s.comparison_id
         ? h("a", { class: "listlink", href: `#/c/${s.comparison_id}` }, h("span", { class: "t" }, s.query),
           h("span", { class: "d" }, ago(s.created_at)))
@@ -245,8 +246,75 @@ async function renderHome() {
     h("div", { style: "margin-top:18px" }, providerPanel()));
 }
 
+async function clearRecent() {
+  if (!confirm("Clear the recent searches list? Saved comparisons and price history are kept.")) return;
+  const r = await api("/api/searches/recent", { method: "DELETE" });
+  if (r.ok) renderHome();
+}
+
 // ------------------------------------------------------------------ search flow
 $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); startResearch(); });
+$("#photo").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) searchByPhoto(f); });
+
+// Search by photo: the page shrinks the photo (Claude reads up to about 1,600 px, and it uploads faster), the app
+// asks Claude what it shows and what's printed on it, and nothing is searched until you confirm or edit it.
+async function searchByPhoto(file) {
+  flash(h("div", { class: "progress", role: "status", "aria-live": "polite" },
+    h("div", { class: "bar" }, h("i", { style: "width:55%" })), h("div", { class: "step" }, "Reading your photo…")));
+  let dataUrl;
+  try { dataUrl = await shrinkPhoto(file); } catch {
+    flash(photoProblem({ message: "This photo format can't be opened here. Save it as a JPEG or PNG and try again." }));
+    return;
+  }
+  const r = await api("/api/photo", { method: "POST", body: JSON.stringify({ image: dataUrl }) });
+  flash(r.ok ? photoCard(r.body, dataUrl) : photoProblem({ message: r.body?.message || r.body?.detail || "The photo couldn't be read.",
+    google_lens: r.body?.google_lens }));
+}
+
+async function shrinkPhoto(file, max = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
+    const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.85);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function lensLink(url) {
+  return h("a", { class: "btn", href: url || "https://lens.google.com/", target: "_blank", rel: "noopener",
+    title: "Opens Google Lens in a new tab; upload the same photo there" }, "Try Google Lens");
+}
+
+function photoProblem(p) {
+  return h("div", { class: "notice", role: "alert" }, h("h3", {}, "Photo not read"),
+    h("p", { style: "margin:0 0 10px" }, p.message),
+    h("div", { class: "actions" }, lensLink(p.google_lens)),
+    h("p", { class: "small muted", style: "margin:8px 0 0" }, "Google Lens opens in a new tab: upload the photo there yourself. Nothing was searched or saved."));
+}
+
+function photoCard(p, dataUrl) {
+  const input = h("input", { type: "text", value: p.search_query, maxlength: "600", "aria-label": "Search for" });
+  const go = (e) => { e.preventDefault(); const q = input.value.trim(); if (!q) return; $("#q").value = q; startResearch({ query: q }); };
+  return h("form", { class: "notice info photo-card", onsubmit: go },
+    h("img", { src: dataUrl, alt: "Your photo" }),
+    h("div", { class: "photo-body" },
+      h("h3", {}, "From your photo"),
+      h("p", { style: "margin:0 0 6px" }, h("b", {}, p.what || "Item not identified"), " ",
+        h("span", { class: `conf ${p.confidence}` }, `${p.confidence} confidence`)),
+      h("p", { class: "small", style: "margin:0 0 6px" }, "Text read from the photo: ",
+        p.label_text.length ? p.label_text.map((t, i) => [i ? " " : "", h("code", {}, t)]) : h("span", { class: "muted" }, "none readable")),
+      p.removed.length ? h("p", { class: "small", style: "margin:0 0 6px" },
+        `Left out because it isn't readable in the photo: ${p.removed.join(", ")}.`) : null,
+      p.notes ? h("p", { class: "small muted", style: "margin:0 0 10px" }, p.notes) : null,
+      h("label", { class: "small", style: "display:block;margin-bottom:4px" }, "Search for (edit if needed)"),
+      h("div", { class: "photo-search" }, input, h("button", { class: "btn primary", type: "submit" }, "Research this")),
+      h("div", { class: "actions", style: "margin-top:10px" }, lensLink(p.google_lens)),
+      h("p", { class: "small muted", style: "margin:8px 0 0" }, p.label,
+        p.cost_usd != null ? ` About US$${p.cost_usd.toFixed(4)} of AI use.` : "", " The photo isn't saved.")));
+}
 document.querySelectorAll('input[name="depth"]').forEach((r) => r.addEventListener("change", updateCostHint));
 $("#status-pill").addEventListener("click", () => { location.hash = "#/"; renderHome(); });
 

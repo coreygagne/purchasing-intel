@@ -122,6 +122,21 @@ EXTRACT_SCHEMA = {
 }
 
 
+PHOTO_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["what", "label_text", "brand", "model_numbers", "search_query", "confidence", "notes"],
+    "properties": {
+        "what": {"type": "string"},
+        "label_text": {"type": "array", "items": {"type": "string"}},
+        "brand": {"type": "string"},
+        "model_numbers": {"type": "array", "items": {"type": "string"}},
+        "search_query": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "notes": {"type": "string"},
+    },
+}
+
+
 class LlmError(Exception):
     pass
 
@@ -210,6 +225,11 @@ def price_context(quote: str, price_text: str, s: Source, tokens: list[str]) -> 
     return ("…" if start else "") + norm[start:end], None
 
 
+def _alnum(text: str) -> str:
+    """Letters and digits only: "XPR 3300" and "XPR-3300" both read as "xpr3300"."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
 def _squash_keep_case(text: str) -> str:
     text = (text or "").replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
     return text.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")
@@ -224,10 +244,15 @@ class ClaudeAnalyst:
         self._fallbacks_supported = self.model in FALLBACK_MODELS
         self.key_rejected = False  # set when Anthropic refuses the key; the app then skips AI steps and says so
 
-    async def _call(self, user: str, schema: dict[str, Any], max_tokens: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    async def _call(self, user: str, schema: dict[str, Any], max_tokens: int,
+                    image: tuple[str, str] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        """`image`: (media type, base64 data) of a photo to send before the text."""
+        content: Any = user if image is None else [
+            {"type": "image", "source": {"type": "base64", "media_type": image[0], "data": image[1]}},
+            {"type": "text", "text": user}]
         kwargs: dict[str, Any] = dict(
             model=self.model, max_tokens=max_tokens, system=SYSTEM,
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": content}],
             output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
         )
         try:
@@ -266,6 +291,40 @@ class ClaudeAnalyst:
         return data, {"model": getattr(resp, "model", self.model),
                       "input_tokens": getattr(usage, "input_tokens", None),
                       "output_tokens": getattr(usage, "output_tokens", None)}
+
+    async def identify_photo(self, media_type: str, data_b64: str) -> dict[str, Any]:
+        """What a photo shows, the text printed on it, and a search for it. A brand or model number is kept only
+        when it's in the text read from the photo; anything else is removed and said so."""
+        user = (
+            "This photo was taken by a purchasing person at an industrial site (marine terminal, rail yard, "
+            "warehouse) who wants to buy this item, or a replacement for it.\n\n"
+            "Return: what - a plain description of the item (type, and size or rating if visible); label_text - "
+            "every piece of text printed on the item, its labels or nameplate, copied exactly as printed (empty "
+            "if none is readable); brand and model_numbers - only if printed and readable in the photo, never "
+            "inferred from how the item looks; search_query - the brand and model number if readable, otherwise "
+            "a short description with the visible specs; confidence - how sure you are of the identification; "
+            "notes - what couldn't be read or should be checked (one or two sentences)."
+        )
+        data, usage = await self._call(user, PHOTO_SCHEMA, 4000, image=(media_type, data_b64))
+        labels = [t.strip()[:160] for t in data.get("label_text", []) if t.strip()][:15]
+        printed = _alnum(" ".join(labels))
+        models = [m.strip()[:60] for m in data.get("model_numbers", []) if m.strip()]
+        kept = [m for m in models if _alnum(m) and _alnum(m) in printed]
+        removed = [m for m in models if m not in kept]
+        brand = data.get("brand", "").strip()[:60]
+        if brand and _alnum(brand) not in printed:
+            removed.append(brand)
+            brand = ""
+        query = data.get("search_query", "").strip()[:200]
+        for tok in ex.model_tokens(query):
+            if _alnum(tok) not in printed:
+                query = re.sub(re.escape(tok), " ", query, flags=re.I)
+                removed.append(tok)
+        what = data.get("what", "").strip()[:200]
+        query = re.sub(r"\s+", " ", query).strip() or " ".join(x for x in (brand, *kept[:1], what) if x)[:200]
+        return {"what": what, "brand": brand, "model_numbers": kept, "label_text": labels, "search_query": query,
+                "confidence": data.get("confidence", "low"), "notes": data.get("notes", "").strip()[:400],
+                "removed": list({_alnum(r): r for r in reversed(removed)}.values())[::-1], "_usage": usage}
 
     async def plan(self, request: str, input_type: str) -> dict[str, Any]:
         user = (

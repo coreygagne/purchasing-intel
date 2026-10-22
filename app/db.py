@@ -123,6 +123,8 @@ class Database:
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(searches)")}
         if "cost_usd" not in cols:  # added after the first release
             self._conn.execute("ALTER TABLE searches ADD COLUMN cost_usd REAL")
+        if "hidden" not in cols:  # "Clear list" hides searches; the rows stay so this month's spend still counts
+            self._conn.execute("ALTER TABLE searches ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
 
     @contextmanager
@@ -166,12 +168,25 @@ class Database:
                             (iso(start),)).fetchone()
         return float(row["s"])
 
+    def record_spend(self, label: str, kind: str, cost_usd: float | None) -> None:
+        """AI spend outside a research (reading a photo): counted in this month's spend, not shown as a search."""
+        now = iso()
+        with self.tx() as c:
+            c.execute("INSERT INTO searches (query, normalized_query, input_type, depth, status, created_at,"
+                      " finished_at, cost_usd, hidden) VALUES (?, ?, ?, ?, 'done', ?, ?, ?, 1)",
+                      (label, label.lower(), kind, kind, now, now, cost_usd))
+
+    def clear_recent_searches(self) -> int:
+        """Hide every search from the recent list. Saved comparisons, price history and spend records stay."""
+        with self.tx() as c:
+            return c.execute("UPDATE searches SET hidden = 1 WHERE hidden = 0 AND status != 'running'").rowcount
+
     def recent_searches(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.tx() as c:
             rows = c.execute(
                 "SELECT s.*, c.title AS comparison_title, c.saved AS comparison_saved"
                 " FROM searches s LEFT JOIN comparisons c ON c.id = s.comparison_id"
-                " ORDER BY s.id DESC LIMIT ?",
+                " WHERE s.hidden = 0 ORDER BY s.id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]

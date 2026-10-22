@@ -119,6 +119,22 @@ button, input, select { font: inherit; color: inherit; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 .searchbox .btn { border-radius: 0 3px 3px 0; border: 0; padding: 0 26px; font-size: 16px; }
+.photo-btn { display: flex; align-items: center; gap: 6px; padding: 0 14px; color: var(--ink-2); cursor: pointer;
+  border-left: 1px solid var(--rule); font-size: 14px; font-weight: 600; }
+.photo-btn:hover { color: var(--ink); }
+.photo-btn:focus-within { outline: 3px solid var(--focus); outline-offset: -3px; }
+@media (max-width: 600px) { .photo-btn span { display: none; } .photo-btn { padding: 0 10px; } }
+.photo-card { display: grid; grid-template-columns: 140px 1fr; gap: 16px; align-items: start; }
+.photo-card img { width: 140px; height: 140px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--rule); }
+.photo-card h3 { margin: 0 0 6px; }
+.photo-card code { font-size: 13px; background: var(--sheet-2); padding: 1px 5px; border-radius: 3px; }
+.photo-search { display: flex; gap: 8px; flex-wrap: wrap; }
+.photo-search input { flex: 1 1 240px; padding: 9px 12px; font: inherit; border: 1px solid var(--rule-strong);
+  border-radius: var(--radius); background: var(--sheet); color: var(--ink); }
+.conf { font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 10px; background: var(--sheet-2); color: var(--ink-2); }
+.conf.high { background: var(--good-bg); color: var(--quoted); }
+.conf.low { background: var(--est-bg); color: var(--est); }
+@media (max-width: 600px) { .photo-card { grid-template-columns: 96px 1fr; gap: 12px; } .photo-card img { width: 96px; height: 96px; } }
 
 .options { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; margin-top: 14px; }
 .seg { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: var(--radius); overflow: hidden; }
@@ -335,6 +351,8 @@ form.assume input { padding: 7px 9px; border: 1px solid var(--rule-strong); bord
 footer.foot { margin: 40px 0 30px; color: var(--ink-3); font-size: 13px; }
 
 /* ------------------------------------------------------------ clarify, lead, suppliers */
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.btn.small { padding: 4px 10px; font-size: 13px; }
 form.clarify { display: grid; gap: 12px; }
 .guide { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); padding: 14px 16px; }
 .guide .kind { font-weight: 700; font-size: 15px; }
