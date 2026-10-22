@@ -137,7 +137,36 @@ async def test_auth_error_is_reported():
         await a.plan("x", "text")
         raise AssertionError("expected LlmError")
     except LlmError as e:
-        assert "key rejected" in str(e)
+        assert "rejected the saved API key" in str(e) and "Add or change API keys" in str(e)
+    assert a.key_rejected  # later AI steps are skipped and the status badge says so
+
+
+def test_rejected_ai_key_shows_in_status_and_skips_ai_reading(tmp_path):
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace as NS
+    from app.config import Settings
+    from app.llm import ClaudeAnalyst
+    from app.main import create_app
+    from tests.fakeweb import FakeWeb
+    from tests.test_api import research
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    calls = []
+
+    async def create(**kw):
+        calls.append(kw)
+        raise anthropic.AuthenticationError("bad key", response=httpx.Response(401, request=req), body=None)
+    stub = NS(create=create)
+    settings = Settings(tavily_api_key="tvly-test-key", anthropic_api_key="sk-ant-old", database_path=tmp_path / "a.db")
+    app = create_app(settings, transport=FakeWeb().transport(),
+                     llm=ClaudeAnalyst(settings, client=NS(messages=stub, beta=NS(messages=stub))))
+    with TestClient(app) as c:
+        assert c.get("/api/status").json()["ai_key_rejected"] is False
+        job = research(c)
+        assert job["status"] == "done", job  # searching still works
+        res = c.get(f"/api/comparisons/{job['comparison_id']}").json()["result"]
+        assert c.get("/api/status").json()["ai_key_rejected"] is True
+    assert len(calls) == 1  # the AI reading step wasn't attempted after the planning call was refused
+    assert any("AI evidence reading skipped" in g for g in res["gaps"])
 
 
 async def test_plan_trims_output():

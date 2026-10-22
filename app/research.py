@@ -69,7 +69,8 @@ AI_EXTRACT_TIMEOUT_S = 150
 # when opened. 2: per-length prices, requested-spec checks, implausibly low prices set aside.
 # 3: with a length to buy, prices must say what length they cover; reel sizes read from titles.
 # 4: suppliers and contacts, market value groups, picks by channel, coverage report, quote drafts.
-ANALYSIS_VERSION = 4
+# 5: sizes and cable types aren't part numbers; listings stating every spec are equivalents of a part number.
+ANALYSIS_VERSION = 5
 FALLBACK_STAGE_TIMEOUT_S = 75  # all pages read via Anthropic web fetch, together
 PAGE_TEXT_CHARS = 15000
 
@@ -325,7 +326,10 @@ class ResearchEngine:
                 max_pages=round(self.settings.fetch_max_pages * FETCH_SCALE[run_depth]))
             contact_pages = await self._contact_pages(sources, local_businesses, fetcher, CONTACT_PAGES[run_depth])
 
-            if self.llm is not None:
+            if self.llm is not None and getattr(self.llm, "key_rejected", False):
+                identity.notes.append("AI evidence reading skipped: Anthropic rejected the saved API key.")
+                llm_summary = None
+            elif self.llm is not None:
                 progress("AI is reading page text (every extracted fact is checked against the source)", 70)
                 try:
                     llm_out = await asyncio.wait_for(self.llm.extract(identity, sources, builder),
@@ -866,6 +870,9 @@ def reanalyze(result: dict[str, Any], assumptions: dict[str, Any], home_province
     if quantity is not None:
         meta["quantity"] = quantity or None
     identity = dict(result["identity"])
+    if identity.get("input_type") != "url":
+        # part numbers are re-read from the request under the current rules ("500MCM" is a size, not a model)
+        identity["model_tokens"] = ex.model_tokens(identity.get("name", ""))
     llm_summary = {"quality": result.get("quality", {}).get("summary"),
                    "alternatives": result.get("alternatives_ai")}
     # drop notes already merged into gaps last time

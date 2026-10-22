@@ -553,3 +553,31 @@ def test_one_business_across_its_pages_directories_and_name_variants():
     assert sorted(v["name"] for v in vendors) == ["McEachern's Tool House", "Nova Pro"]
     mc = next(v for v in vendors if v["name"].startswith("McEachern"))
     assert mc["domain"] == "itoolhouse-example.ca" and mc["phones"][0]["value"] == "(807) 555-0151"
+
+
+# ------------------------------------------- from the user's Mac run (2026-10-22, TK500-03)
+
+
+def test_sizes_and_cable_types_are_not_part_numbers():
+    assert ex.model_tokens("TK500-03 3C 500MCM COPPER TECK CABLE 1000V") == ["TK500-03"]
+    assert ex.model_tokens("12/3 NMD90 75m") == []
+    assert ex.model_tokens("TECK90 300kcmil 5kV") == []
+    assert ex.model_tokens("Milwaukee 2767-20") == ["2767-20"]
+
+
+def test_listing_with_every_spec_is_an_equivalent_when_a_part_number_was_given():
+    from app.evidence import apply_match
+    from app.analysis import assess_comparability, recommend, set_compare_values
+    specs, length = ex.request_specs("TK500-03 3C 500MCM COPPER TECK CABLE 1000V")
+    tokens = ["TK500-03"]
+    equiv = _offer(1, 250.0, product_title="500/3C 1KV TECK90 Armoured Cable, Black, copper", per_length="ft",
+                   per_ft_cad=250.0)
+    other = _offer(2, 90.0, product_title="3/0/3C 1KV TECK90 Armoured Cable, copper", per_length="ft", per_ft_cad=90.0)
+    apply_match([equiv, other], tokens, {}, specs, length)
+    assert equiv.match_level == "equivalent" and other.spec_conflicts
+    assess_comparability([equiv, other], tokens, None)
+    set_compare_values([equiv, other])
+    assert equiv.comparable and not other.comparable
+    assert any("Equivalent by specs" in f for f in equiv.flags)
+    rec = recommend([equiv, other], tokens, specs=specs)
+    assert rec["lowest"]["supplier"] == "S1" and any("No priced listing names part TK500-03" in n for n in rec["notes"])

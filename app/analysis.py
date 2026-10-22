@@ -85,7 +85,7 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append("price range, not a single price")
         elif o.price is None:
             reasons.append("no price found")
-        if tokens and o.match_level != "exact":
+        if tokens and o.match_level not in ("exact", "equivalent"):
             reasons.append({"variant": "different variant/kit or suffix not confirmed",
                             "compatible": "compatible/aftermarket item, not the original",
                             "different": "requested model not found in listing"}.get(o.match_level, "not verified as same item"))
@@ -137,6 +137,9 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
                            "it doesn't prove quality, that the item is genuine, or who the seller is.")
         if o.supplier_type == UNKNOWN and not o.supplier_in_directory:
             o.flags.append("Supplier not in the built-in directory - verify the business before ordering.")
+        if o.match_level == "equivalent" and o.comparable:
+            o.flags.append("Equivalent by specs: states every spec you asked for but not your part number - confirm "
+                           "the construction and approvals match.")
         if not tokens and o.comparable:
             if o.spec_missing:
                 o.flags.append(f"The listing doesn't state: {', '.join(o.spec_missing)} - confirm before ordering.")
@@ -347,6 +350,17 @@ def recommend(offers: list[Offer], tokens: list[str], specs: list[dict[str, Any]
         elif not confirmed:
             notes.append(f"No listing states all of: {labels}. Check the size and material on each listing "
                          "before ordering.")
+    if tokens:
+        exact = [o for o in ranked_pool if o.match_level == "exact"]
+        equivalent = [o for o in ranked_pool if o.match_level == "equivalent"]
+        if exact and equivalent:
+            notes.append(f"{len(equivalent)} listing(s) state every spec but not part {', '.join(tokens)}; the "
+                         f"recommendations use the {len(exact)} that name it. The equivalents are in the table.")
+            ranked_pool = exact
+        elif equivalent:
+            notes.append(f"No priced listing names part {', '.join(tokens)}. The recommendations use {len(equivalent)} "
+                         f"listing(s) that state every spec you asked for ({labels}): equivalent products, not the "
+                         "same part - confirm construction and approvals.")
     known = [o for o in ranked_pool if _cmp_value(o) is not None]
     if len(known) >= 3:
         med = statistics.median(_cmp_value(o) for o in known)

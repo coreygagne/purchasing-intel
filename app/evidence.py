@@ -522,7 +522,7 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             if reel:  # "250 ft reel" sold as one item: the price covers that length
                 o.per_length, o.per_length_qty = reel.unit, reel.qty
                 o.per_length_text = f"title says '{reel.text}'"
-        if specs and not tokens:
+        if specs:
             # only the listing's own words count: its title, page data and quoted text
             listing = " ".join([o.product_title, *o.specs.values(), *o.identifiers.values(),
                                 o.evidence_quote if o.price_basis in ("snippet", "llm_verified", "shopping_api") else ""])
@@ -541,6 +541,13 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             titled = ex.match_offer(tokens, o.product_title)
             if titled.level == "variant":
                 m = titled
+        if tokens and m.level in ("different", "unverified") and specs and len(specs) >= 2 and \
+                not o.spec_conflicts and not o.spec_missing:
+            # a part number plus full specs ("TK500-03 3C 500MCM copper teck 1000V"): another maker's listing that
+            # states every requested spec is an equivalent product, not the same part
+            m = ex.MatchResult("equivalent", [f"Doesn't name {', '.join(tokens)}, but states every spec you asked for "
+                                              f"({', '.join(o.spec_confirmed)}): an equivalent product from another "
+                                              "maker or catalogue. Confirm the construction before ordering."])
         o.match_level, o.match_notes = m.level, m.notes
         o.price_label = PRICE_BASIS_LABELS.get(o.price_basis, o.price_basis)
         if o.price_type == "quote_required":

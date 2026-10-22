@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 URL_RE = re.compile(r"^\s*https?://\S+\s*$", re.I)
 
 _UNIT_SUFFIX = (
-    r"(?:v|vac|vdc|volt|volts|ft|feet|in|inch|inches|mm|cm|m|km|lb|lbs|kg|g|oz|gal|l|ml|w|kw|"
+    r"(?:v|vac|vdc|kv|volt|volts|mcm|kcmil|ft|feet|in|inch|inches|mm|cm|m|km|lb|lbs|kg|g|oz|gal|l|ml|w|kw|"
     r"kva|a|ah|amp|amps|psi|bar|hp|rpm|pack|pk|pc|pcs|ct|mah|gauge|ga|awg|mil|tpi|cfm|gpm|btu|"
     r"x|nm|k|s|st|nd|rd|th|yr|yrs|year|years|mo|day|days|deg|f|c|mp|gb|tb|mb|hz|khz|mhz|ghz|"
     r"mpa|kpa|t|ton|tons|qt|pt|sqft|cu|cuft|lm|db|ohm|mph)"
@@ -34,6 +34,9 @@ _SPEC_AFTER_RE = re.compile(
     r"lumens?|degrees?|°|grit|tpi|kw|kva|hz)\b",
     re.I,
 )
+# cable type designations ("TECK90", "NMD90", "ACWU90", "RW90"): a kind of cable, not one product's model number
+_CABLE_TYPE_RE = re.compile(r"^(?:teck|nmd|nmwu|acwu|ac|rw|rwu|tw|twu|tw75|t|xhhw|thhn|thwn|sjoow|soow|loomex)-?\d{2}$",
+                            re.I)
 _DIM_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?[a-z]*$", re.I)
 
 
@@ -67,7 +70,7 @@ def model_tokens(text: str) -> list[str]:
         letters = sum(ch.isalpha() for ch in tok)
         if digits == 0:
             continue
-        if _UNIT_TOKEN_RE.match(tok) or _DIM_TOKEN_RE.match(tok):
+        if _UNIT_TOKEN_RE.match(tok) or _DIM_TOKEN_RE.match(tok) or _CABLE_TYPE_RE.match(tok):
             continue
         if letters == 0 and "-" not in tok and digits < 4:
             continue

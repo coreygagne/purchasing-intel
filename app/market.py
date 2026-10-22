@@ -34,7 +34,7 @@ def _same_item(o: Offer, tokens: list[str]) -> bool:
     if o.superseded() or o.spec_conflicts:
         return False
     if tokens:
-        return o.match_level == "exact"
+        return o.match_level in ("exact", "equivalent")
     return o.match_level not in ("different", "compatible")
 
 

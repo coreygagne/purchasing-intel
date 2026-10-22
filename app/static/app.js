@@ -116,8 +116,10 @@ async function loadStatus() {
   const has = (name) => prov.some((p) => p.configured && p.name.startsWith(name));
   const extra = [];
   if (has("SerpApi") && r.body?.web_search !== "SerpApi (Google)") extra.push("Google Shopping");
-  if (has("Claude")) extra.push("AI reading");
-  pill.querySelector("span").textContent = ok ? `Ready: ${[r.body.web_search, ...extra].join(" + ")}` : "Setup needed";
+  const aiRejected = !!r.body?.ai_key_rejected;
+  if (has("Claude") && !aiRejected) extra.push("AI reading");
+  pill.querySelector("span").textContent = ok ? `Ready: ${[r.body.web_search, ...extra].join(" + ")}${aiRejected ? " · AI key rejected" : ""}` : "Setup needed";
+  pill.classList.toggle("warn", ok && aiRejected);
   $("#search-btn").disabled = !ok;
   updateCostHint();
 }
@@ -170,6 +172,11 @@ function providerPanel() {
   if (!st) return null;
   return h("div", { class: "panel" },
     h("h3", {}, "Data sources"),
+    st.ai_key_rejected ? h("div", { class: "notice", role: "alert", style: "margin-bottom:12px" },
+      h("h3", {}, "Anthropic rejected your saved key"),
+      h("p", { style: "margin:0" }, "AI reading is off until you paste a new key below. Searches still run. Create one at ",
+        link("https://console.anthropic.com/settings/keys", "console.anthropic.com"), " (API Keys, then Create Key)."),
+      keyForm()) : null,
     h("table", { class: "simple" },
       h("thead", {}, h("tr", {}, h("th", {}, "Service"), h("th", {}, "What it does"), h("th", {}, "Status"))),
       h("tbody", {}, st.providers.map((p) => h("tr", {},
@@ -531,9 +538,10 @@ function marketPanel(mv) {
 
 // ------------------------------------------------------------------ table
 function matchBadge(o) {
-  const t = { exact: "Exact model", variant: "Different variant", compatible: "Compatible / aftermarket",
-    different: "Different model", unverified: "Not verified" }[o.match_level] || o.match_level;
-  return h("span", { class: `badge ${o.match_level === "exact" ? "exact" : (o.match_level === "unverified" ? "" : "warn")}` }, t);
+  const t = { exact: "Exact model", equivalent: "Equivalent by specs", variant: "Different variant",
+    compatible: "Compatible / aftermarket", different: "Different model", unverified: "Not verified" }[o.match_level] || o.match_level;
+  const cls = o.match_level === "exact" ? "exact" : (["unverified", "equivalent"].includes(o.match_level) ? "" : "warn");
+  return h("span", { class: `badge ${cls}` }, t);
 }
 function deliveredCell(o) {
   const d = o.delivered;

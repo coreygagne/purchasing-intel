@@ -27,7 +27,7 @@ def _vendor_index(vendors: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def _same_item(o: Offer, tokens: list[str]) -> bool:
     if o.superseded() or o.spec_conflicts or o.price_cad is None or o.price_type != "listed":
         return False
-    return o.match_level == "exact" if tokens else o.match_level not in ("different", "compatible")
+    return o.match_level in ("exact", "equivalent") if tokens else o.match_level not in ("different", "compatible")
 
 
 def _row(o: Offer, vendor: dict[str, Any] | None, labels: list[str], quantity: int | None,

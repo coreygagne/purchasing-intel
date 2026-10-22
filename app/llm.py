@@ -222,6 +222,7 @@ class ClaudeAnalyst:
         self.client = client or anthropic.AsyncAnthropic(
             api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, timeout=180.0, max_retries=2)
         self._fallbacks_supported = self.model in FALLBACK_MODELS
+        self.key_rejected = False  # set when Anthropic refuses the key; the app then skips AI steps and says so
 
     async def _call(self, user: str, schema: dict[str, Any], max_tokens: int) -> tuple[dict[str, Any], dict[str, Any]]:
         kwargs: dict[str, Any] = dict(
@@ -241,7 +242,9 @@ class ClaudeAnalyst:
             else:
                 resp = await self.client.messages.create(**kwargs)
         except anthropic.AuthenticationError as exc:
-            raise LlmError("Anthropic API key rejected - check ANTHROPIC_API_KEY") from exc
+            self.key_rejected = True
+            raise LlmError("Anthropic rejected the saved API key (it may have been deleted or replaced). Paste a "
+                           "new key under Data sources > Add or change API keys") from exc
         except anthropic.RateLimitError as exc:
             raise LlmError("Anthropic rate limit reached - try again shortly") from exc
         except anthropic.APIStatusError as exc:
