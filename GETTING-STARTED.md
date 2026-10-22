@@ -149,23 +149,25 @@ right box and click **Save**. The badge at the top right then lists it, for exam
 
 ## Updating to a new version
 
-Your keys and saved research stay on your computer. On a Mac the starter brings them across for you.
+Your keys and saved research stay where they are. The app updates itself from the file you download.
 
 1. Close the Terminal (or black) window to stop the app.
-2. Rename your current folder to **purchasing-intel-old**. Leave it where it is.
-3. Download the new version from https://github.com/coreygagne/purchasing-intel (**Code**, then
-   **Download ZIP**). Unzip it and move the new **purchasing-intel-main** folder into the same place as
-   **purchasing-intel-old**, so the two folders sit side by side.
-4. Start the app from the new folder.
-   - **Mac:** double-click **Start Purchasing Research**. Its window says "Found your previous copy" and
-     copies your keys and saved research over by itself. You may need **Open Anyway** again (step 4
-     above), and the first start takes a minute or two again.
-   - **Windows:** first copy the **.env** file and the **data** folder from the old folder into the new
-     one, then double-click **run.bat**.
-5. Check that your saved comparisons are there, then delete the **purchasing-intel-old** folder.
+2. Go to https://github.com/coreygagne/purchasing-intel and click **Code**, then **Download ZIP**. Leave the
+   file in your **Downloads** folder. You don't need to unzip or move it.
+3. Start the app the usual way: double-click **Start Purchasing Research** on a Mac, or **run.bat** on
+   Windows, in the folder you already use.
+4. The window says "A newer version was downloaded" and asks "Update this copy now?". Press **Return**.
+   It copies the new version over the old one, keeps your keys, saved research and settings, and restarts.
+   If you type **n**, it starts the version you have and won't ask again about that download.
+5. Afterwards you can delete the downloaded file from Downloads.
 
-If the app asks for a key anyway, the old folder wasn't found next to the new one. Paste the key into the
-box, or move the folders side by side and start again.
+**If your copy is older than October 22, 2026**, it doesn't have the updater yet. Update it once the old way:
+1. Rename your folder to **purchasing-intel-old**.
+2. Download and unzip the new version next to it.
+3. Start the new copy. It brings your keys and saved research across.
+
+From then on, updating is just steps 1 to 4 above. On Windows, the old way also means copying the **.env** file
+and the **data** folder into the new folder yourself.
 
 ## If something goes wrong
 

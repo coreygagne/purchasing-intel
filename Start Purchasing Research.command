@@ -50,6 +50,15 @@ if [ -z "$PY" ]; then
   pause_and_exit 1
 fi
 
+# 1b. Updating: a newer "Download ZIP" in your Downloads folder is copied over this folder (after asking),
+#     keeping your keys, saved research and the .venv folder. Then this starter restarts as the new version.
+"$PY" -I scripts/update_from_download.py "$(pwd)"
+if [ $? -eq 3 ]; then
+  echo
+  echo "Restarting the updated version..."
+  exec bash "./Start Purchasing Research.command"
+fi
+
 # 2. First time only: a private Python environment for the app (in the .venv folder)
 if [ ! -x ".venv/bin/python" ]; then
   echo "Setting up for the first time. This takes a minute or two..."

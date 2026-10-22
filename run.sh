@@ -15,6 +15,9 @@ if [ ! -d .venv ]; then
 fi
 # shellcheck disable=SC1091
 . .venv/bin/activate
+# A newer "Download ZIP" in ~/Downloads is copied over this folder (after asking), keeping .env, data and .venv
+rc=0; python -I scripts/update_from_download.py "$(pwd)" || rc=$?
+if [ "$rc" -eq 3 ]; then echo "Restarting the updated version..."; exec bash "$0" "$@"; fi
 pip install -q -r requirements.txt
 # The app reads .env itself; only HOST/PORT are needed here (read without executing .env as shell).
 env_value() { [ -f .env ] && grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ' || true; }

@@ -37,6 +37,10 @@ Requirements: Python 3.11+ and internet access to the hosts listed under [Networ
 - **Windows:** double-click `run.bat`. It installs Python with winget if it's missing, sets up `.venv` on the
   first run, starts the app and opens the browser.
 - **Linux (or a Mac terminal):** run `./run.sh`.
+- **Updating:** download the new ZIP from GitHub and start the app as usual. The starter finds the download in
+  `~/Downloads` (the zip, or the folder Safari unzips it to), asks, and copies it over the install. It keeps
+  `.env`, `data/` and `.venv/` and mirrors `app/`, `scripts/` and `tests/` (`scripts/update_from_download.py`,
+  tested in `tests/test_updater.py`).
 
 The app runs at http://127.0.0.1:8000. With no key configured, it shows a setup screen where you paste an
 Anthropic key (and optionally a Tavily key). The key is checked with Anthropic using a free model-list call,

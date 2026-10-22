@@ -11,6 +11,11 @@ py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>
 if not defined PY python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1 && set "PY=python"
 if not defined PY goto :nopython
 
+REM 1b. Updating: a newer "Download ZIP" in your Downloads folder is copied over this folder (after asking),
+REM     keeping your keys, saved research and the .venv folder. Kept on one line: Windows reads a running
+REM     batch file as it goes, so the restart must already be read before this file is replaced.
+%PY% -I scripts\update_from_download.py "%~dp0." & if errorlevel 3 (start "Purchasing Research" "%~f0" & exit /b 0)
+
 REM 2. First time only: a private Python environment for the app (in the .venv folder)
 if not exist ".venv\Scripts\python.exe" (
   echo Setting up for the first time. This takes a minute or two...
