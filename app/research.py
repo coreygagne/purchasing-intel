@@ -825,6 +825,10 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
     an.assess_comparability(offers, tokens, quantity, order_length=length,
                             badges_by_source={s.id: s.badges for s in sources if s.badges}, wanted_condition=wanted)
     for o in offers:
+        kind = guides.off_topic(name, o.product_title) if shortlist else None
+        if kind and o.price is not None:
+            o.exclusion_reasons.append(f"its title doesn't name {kind} - may be a different product")
+            o.comparable = False
         words = guides.consumer_words(name, f"{o.product_title} {o.evidence_quote or ''}")
         if words:
             o.exclusion_reasons.append(f"looks like a consumer product ('{words}') - not built or checked for "

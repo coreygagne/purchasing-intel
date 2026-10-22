@@ -177,6 +177,7 @@ GUIDES: list[dict[str, Any]] = [
 for _g in GUIDES:
     _g["_broad"] = re.compile(r"^\s*(?:" + _g["broad"] + r")\s*$", re.I)
     _g["_match"] = re.compile(_g["match"], re.I)
+    _g["_about"] = re.compile(r"\b(?:" + _g["broad"] + r")\b|" + _g["match"], re.I)
 
 
 def match(query: str) -> tuple[dict[str, Any], bool] | None:
@@ -188,6 +189,15 @@ def match(query: str) -> tuple[dict[str, Any], bool] | None:
         if g["_match"].search(q):
             return g, False
     return None
+
+
+def off_topic(query: str, title: str) -> str | None:
+    """For a guided request, the guide's title when a listing's title doesn't name the product type at all
+    ("Canadian Tire Roadside Assistance" in a safety-glasses search), else None."""
+    found = match(query)
+    if not found or found[0]["_about"].search(title or ""):
+        return None
+    return found[0]["title"].lower()
 
 
 def consumer_words(query: str, text: str) -> str | None:

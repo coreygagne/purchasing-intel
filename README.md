@@ -428,7 +428,9 @@ aren't. The changes:
   out of it.
 - **Live check (2026-10-22, Tavily, quick depth):** "portable two-way radio" first ranked a Best Buy camping
   walkie-talkie pack against commercial radios; it now shows a shortlist with the camping set excluded.
-  "Milwaukee 2767-20" behaved as before (exact-model prices compared). Saved earlier runs re-analysed under
+  "Milwaukee 2767-20" behaved as before (exact-model prices compared). "safety glasses" gave a shortlist of
+  five priced options with the checklist in 8 quote drafts; it first listed "Canadian Tire Roadside
+  Assistance" as an option, so shortlist options must now name the product type. Saved earlier runs re-analysed under
   the new rules: no loss of comparable prices for exact-model items.
 - **Out of scope on purpose:** price ranking for vehicles and property, worldwide coverage, deeper import
   modelling, dashboards and forecasting.

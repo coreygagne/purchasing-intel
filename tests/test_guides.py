@@ -58,3 +58,16 @@ def test_type_search_gives_a_shortlist_not_a_ranking():
     shown = {p["offer_id"] for p in plain["listing_pages"]}
     assert {"O2", "O3"} <= shown and "O1" not in shown
     assert res["guide"]["key"] == "radios"
+
+
+def test_shortlist_leaves_out_listings_that_are_not_the_product_type():
+    from tests.test_listing_pages import _offer, _run
+    offers = [_offer(1, 74.99, "Canadian Tire Roadside Assistance", supplier_type="retailer"),
+              _offer(2, 47.95, "Red Z87.1 Safety Glasses #749618", supplier_type="retailer"),
+              _offer(3, 86.99, "CSA Prescription Safety Eyewear", supplier_type="retailer")]
+    res = _run("safety glasses", offers, "ppe")
+    by = {o["id"]: o for o in res["offers"]}
+    assert not by["O1"]["comparable"] and any("doesn't name" in r for r in by["O1"]["exclusion_reasons"])
+    assert by["O2"]["comparable"] and by["O3"]["comparable"]
+    assert guides.off_topic("portable two-way radio", "Kenwood NX-P1300 Commercial Radios") is None
+    assert guides.off_topic("work lights", "LED Light Tower 4 x 300 W") is None
