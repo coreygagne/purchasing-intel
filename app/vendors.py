@@ -16,7 +16,7 @@ from . import extract as ex
 from .evidence import Offer, Source, is_seller_source
 from .suppliers import (AUCTION, B2B_MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, COMPLAINTS, DEALS, DIRECTORY,
                         DISTRIBUTOR, FORUM, GOVERNMENT, MANUFACTURER, MARKETPLACE, PROPERTY_SITE, RETAILER, REVIEW,
-                        SEARCH, UNKNOWN, VIDEO, domain_of, is_platform_domain, lookup_by_name)
+                        SEARCH, UNKNOWN, VIDEO, domain_of, is_non_commercial, is_platform_domain, lookup_by_name)
 
 NOT_SUPPLIERS = {REVIEW, FORUM, VIDEO, COMPLAINTS, GOVERNMENT, DEALS, SEARCH}
 TIERS = ("local", "regional", "canada", "us", "international")
@@ -28,6 +28,12 @@ _PLATFORM_TYPES = {MARKETPLACE, BUSINESS_DIRECTORY, CLASSIFIEDS, AUCTION, PROPER
 _TRADE_WORDS = re.compile(r"\b(trade (?:account|pricing|customers?)|contractor pricing|volume (?:discount|pricing)|"
                           r"bulk (?:pricing|orders?|discount)|wholesale|request (?:a )?quote|rfq|account pricing|"
                           r"tiered pricing|price breaks?)\b", re.I)
+# pages of utilities, public bodies, news and research: they mention supply and addresses but don't sell
+_NOT_A_SELLER = re.compile(r"\b(electricity|utility|utilities|power outages?|outage|hydro one|ratepayers?|municipal|"
+                           r"city of|township of|government|ministry|council|news|press release|thesis|journal|"
+                           r"university|college|association|chamber of commerce|view member|member directory|"
+                           r"careers?|job openings?|jobs at)\b", re.I)
+
 # directory and social pages about one business (not search-results pages or feeds listing many)
 _DIRECTORY_BUSINESS = re.compile(
     r"yellowpages\.ca/bus/|canada411\.ca/business/|yelp\.(?:ca|com)/biz/|"
@@ -45,8 +51,31 @@ def directory_business_name(s: Source) -> str | None:
 
 
 def _norm_name(name: str) -> str:
-    n = re.sub(r"\b(ltd|limited|inc|incorporated|corp|corporation|co|company|the)\b\.?", " ", (name or "").lower())
+    n = re.sub(r"['’]s\b", "", (name or "").lower())  # "McEachern's Tool House" = "McEachern Tool House"
+    n = re.sub(r"\b(ltd|limited|inc|incorporated|corp|corporation|co|company|the)\b\.?", " ", n)
     return re.sub(r"[^a-z0-9]", "", n)
+
+
+_HOME_WORDS = re.compile(r"^(home|homepage|home page|welcome|official site|official website|contact us|about us)$", re.I)
+
+
+def site_name(s: Source) -> str | None:
+    """A business's own name from its page title ("McEachern Tool House: HOME", "Widget X | Acme Supply"),
+    accepted only when it matches the site's domain, so a product name or another business isn't taken."""
+    root = re.sub(r"[^a-z0-9]", "", s.domain.split(".")[-2] if s.domain.count(".") else s.domain)
+    parts = [p.strip() for p in re.split(r"\s+[|–—]\s+|\s+-\s+|:\s+", s.title or "") if p.strip()]
+    for part in reversed(parts):
+        if _HOME_WORDS.match(part) or len(part) > 60 or ex.model_tokens(part):
+            continue
+        words = [w for w in re.findall(r"[a-z0-9]+", _norm_name_words(part)) if len(w) >= 3]
+        if root and words and (sum(1 for w in words if w in root) >= max(1, len(words) // 2)
+                               or _norm_name(part) in root or root in _norm_name(part)):
+            return part
+    return None
+
+
+def _norm_name_words(name: str) -> str:
+    return re.sub(r"['’]s\b", "", (name or "").lower())
 
 
 def _domain_for(info_name: str) -> str | None:
@@ -112,21 +141,40 @@ class _Vendor:
 
 def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: list[dict[str, Any]] | None = None,
                   contact_pages: list[dict[str, Any]] | None = None, *, home_city: str = "Thunder Bay",
-                  quantity: int | None = None) -> list[dict[str, Any]]:
+                  quantity: int | None = None, item: str = "", tokens: list[str] | None = None
+                  ) -> list[dict[str, Any]]:
     vendors: dict[str, _Vendor] = {}
     by_name: dict[str, str] = {}
 
     def get(domain: str | None, name: str) -> _Vendor:
         nn = _norm_name(name)
         key = domain or f"name:{nn}"
+        if key not in vendors and nn and nn not in by_name:
+            # "Nova Pro" and "Nova-Pro Industrial Supply Ltd": one name is the start of the other
+            longer = [k for k in by_name if len(min(k, nn, key=len)) >= 6 and (k.startswith(nn) or nn.startswith(k))]
+            if len(longer) == 1:
+                nn_match = longer[0]
+                by_name[nn] = by_name[nn_match]
         if key not in vendors and nn and nn in by_name:
-            key = by_name[nn]  # same business seen by name (map listing, Google Shopping seller)
+            key = by_name[nn]  # same business seen by name (map listing, directory, Google Shopping seller)
         if key not in vendors:
             vendors[key] = _Vendor(key, name, domain)
         v = vendors[key]
+        if domain and not v.domain:  # a business first seen by name, now with its own site
+            v.domain, v.website = domain, v.website or f"https://{domain}/"
         if nn and nn not in by_name:
             by_name[nn] = key
         return v
+
+    offer_sources = {o.source_id for o in offers if o.source_id}
+    # a business's name from any of its own pages' titles ("HOME | McEachern Tool House"), used for all of them
+    site_names: dict[str, str] = {}
+    for s in sources:
+        if s.type == UNKNOWN and s.domain not in site_names:
+            n = site_name(s)
+            if n:
+                site_names[s.domain] = n
+    from .discovery import _about_item  # noqa: PLC0415 - shared relevance rule
 
     src_by_id = {s.id: s for s in sources}
     # 1. web sources: sellers and single-business directory listings
@@ -150,7 +198,19 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
             continue  # Google product pages: the seller is the offer's supplier (step 3)
         if not is_seller_source(s):
             continue  # found by a review/spec search: not evidence that they sell it
-        v = get(s.domain, s.name)
+        if is_platform_domain(s.domain) or is_non_commercial(s.domain):
+            continue  # a file host, public body or school: not a seller
+        loc_tier = (s.location or {}).get("tier")
+        about = _about_item(f"{s.title} {s.snippet}", item, tokens or [])
+        if s.type == UNKNOWN and s.id not in offer_sources and not about:
+            if loc_tier not in ("local", "regional") or _NOT_A_SELLER.search(f"{s.title} {s.snippet}"):
+                continue  # an unclassified page that names neither the item nor a nearby business that sells
+        name = s.name
+        if s.type == UNKNOWN and name == s.domain:
+            name = site_names.get(s.domain, name)
+        v = get(s.domain, name)
+        if v.name == v.domain and name != s.domain:
+            v.name = name
         v.type, v.country = s.type, s.country
         v.channels.update(c for c in s.channels if c not in ("reviews", "issues", "specs"))
         v.markets.update(s.markets)
@@ -174,8 +234,7 @@ def build_vendors(sources: list[Source], offers: list[Offer], local_businesses: 
         if is_platform_domain(dom):
             dom = None  # e.g. a Facebook page as "website": key by name, never pool with other businesses
         v = get(dom, b["name"])
-        if v.name == (dom or "") or v.name.startswith(dom or "\0"):
-            v.name = b["name"]  # a real business name beats a bare domain
+        v.name = b["name"]  # the map listing's business name beats a domain or a page-title name
         basis = "Google Maps listing"
         url, seen = b.get("listing_url"), b.get("retrieved_at")
         if b.get("website"):

@@ -25,6 +25,7 @@ async def main() -> int:
     ap.add_argument("query")
     ap.add_argument("--depth", default="quick", choices=["quick", "standard", "deep"])
     ap.add_argument("--save", action="store_true", help="store the result in the configured database")
+    ap.add_argument("--json", help="also write the full result to this file (for inspection)")
     args = ap.parse_args()
 
     settings = load_settings()
@@ -52,7 +53,8 @@ async def main() -> int:
     print(f"\nIdentified as: {res['identity']['name']}  (models: {res['identity']['model_tokens'] or 'none'})")
     for q in res["queries"]:
         status = f"{q['result_count']} results" if q["status"] == "ok" else f"{q['status']}: {(q.get('error') or {}).get('message')}"
-        print(f"  query [{q['purpose']}] {q['query']!r}: {status}")
+        where = f" on {', '.join(q['domains'])}" if q.get("domains") else ""
+        print(f"  query [{q['purpose']}] {q['query']!r}{where}: {status}")
     print(f"Usage: {res['credits']}")
     print(f"Sources: {res['counts']}; pages read: {res['fetch']}")
     for s in res["sources"]:
@@ -92,6 +94,10 @@ async def main() -> int:
         print(f"Market (new): {mv['count']} prices, low {mv['low']}, median {mv['median']}, high {mv['high']}")
     print("Next steps:", *((res.get("coverage") or {}).get("next_steps") or []), sep="\n  - ")
     print("\nGaps:", *res["gaps"], sep="\n  - ")
+    if args.json:
+        import json
+        with open(args.json, "w") as f:
+            json.dump(res, f, indent=1, default=str)
     if args.save:
         cid = db.save_comparison(title=res["identity"]["name"][:200], query=args.query,
                                  normalized=args.query.lower().strip(), product_key=res["product_key"], result=res)

@@ -148,7 +148,7 @@ _CATEGORY_WORDS = [
                   r"boom lift|scissor lift|man ?lift|generator|compressor|welder|conveyor|grader|sweeper|machine|"
                   r"machinery|equipment|hoist|winch|pallet (?:truck|jack)|pallet racking|racking)\b"),
     ("tools", r"\b(drill|impact|wrench|saw|grinder|ratchet|socket set|hammer|driver|tools?|torque|hand truck|dolly|"
-              r"charger)\b"),
+              r"charger|milwaukee|dewalt|makita|hilti|ryobi|ridgid|snap-on|klein tools|metabo)\b"),
     ("parts", r"\b(bearings?|seals?|gaskets?|filters?|belts?|hoses?|fittings?|valves?|pumps?|couplings?|sprockets?|"
               r"shackles?|slings?|bolts?|nuts?|screws?|fasteners?|tires?|tyres?|parts?)\b"),
     ("consumables", r"\b(rags?|absorbents?|tape|lubricant|grease|oil|fuel|diesel|paper|cleaners?|degreaser|"
@@ -258,7 +258,9 @@ def initial_plan(name: str, category: Category, depth: str, *, brand: str | None
             add(6, "distributor", "canada", f"{q} distributor Canada", "canada")
         add(7, "reviews", "any", f"{q} review")
         add(8, "distributor", "regional", f"{q} supplier {region} OR Ontario", "canada")
-        add(9, "directory", "local", f"{term} {city}", "canada", DIRECTORY_DOMAINS)
+        if category.supplier_terms or brand:  # directories list businesses by trade, not by product
+            add(9, "directory", "local", f"{category.supplier_terms[0] if category.supplier_terms else brand + ' dealer'} "
+                                         f"{city}", "canada", DIRECTORY_DOMAINS)
         add(10, "issues", "any", f"{q} problems complaints recall")
         add(11, "used", "canada", f"used {q} for sale Ontario", "canada", list(category.used_domains))
         add(12, "b2b", "international", f"{q} wholesale manufacturer", None, B2B_DOMAINS)
@@ -276,8 +278,15 @@ def initial_plan(name: str, category: Category, depth: str, *, brand: str | None
         add(9.5 + i * 0.1, "ai_suggested", "canada", extra, "canada")
     cap = budget if budget is not None else DEPTH_BUDGET.get(depth, DEPTH_BUDGET["standard"])["rounds"][0]
     chosen = [pq for _, pq in sorted(cands, key=lambda t: t[0])]
-    # the channels that must always be investigated stay in, whatever the budget
-    must = [pq for pq in chosen if pq.channel in ALWAYS or pq.channel == "local_suppliers"]
+    # the channels that must always be investigated stay in, whatever the budget: their first search each
+    # (a second wholesale or manufacturer search is optional, so a small budget still reaches reviews, used, B2B)
+    must, firsts = [], set()
+    for pq in chosen:
+        if pq.channel in ALWAYS and pq.channel not in firsts:
+            firsts.add(pq.channel)
+            must.append(pq)
+        elif pq.channel == "local_suppliers":
+            must.append(pq)
     rest = [pq for pq in chosen if pq not in must]
     picked = must + rest[:max(0, cap - len(must))]
     order = {id(pq): i for i, pq in enumerate(chosen)}
@@ -358,13 +367,17 @@ def find_leads(sources: list[Any], local_businesses: list[dict[str, Any]], *, na
     for n in local_names or []:
         if n.lower() not in named:
             leads.append(Lead("local_name", n, n, "local", 2))
+    maker_roots = {d.split(".")[-2] for d in covered if d.count(".")}
     for s in sources:
         if s.domain in covered or s.type not in (DISTRIBUTOR, RETAILER, UNKNOWN, MANUFACTURER):
             continue
         text = f"{s.title} {s.snippet}"
         local = HOME["city"].lower() in text.lower()
         if s.type == MANUFACTURER:
-            leads.append(Lead("manufacturer", s.domain, s.name, "any", 3))
+            root = s.domain.split(".")[-2] if s.domain.count(".") else s.domain
+            if root not in maker_roots:  # one where-to-buy search per maker, not one per maker site
+                maker_roots.add(root)
+                leads.append(Lead("manufacturer", s.domain, s.name, "any", 3))
         elif not ex.find_prices(s.snippet or "") and _about_item(text, name, tokens):
             leads.append(Lead("supplier", s.domain, s.name, "local" if local else "canada", 2 if local else 4))
     if brand:

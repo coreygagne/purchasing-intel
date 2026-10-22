@@ -536,6 +536,11 @@ def apply_match(offers: list[Offer], tokens: list[str], sources_by_id: dict[str,
             if o.price_basis == "snippet" and o.source_id in sources_by_id:
                 text += " " + (o.evidence_quote or "")
         m = ex.match_offer(tokens, text)
+        if tokens and m.level == "exact" and o.price_basis != "llm_verified":
+            # a title naming a sibling model wins over the body: "2767-22R ... Includes: (2767-20)" is a kit
+            titled = ex.match_offer(tokens, o.product_title)
+            if titled.level == "variant":
+                m = titled
         o.match_level, o.match_notes = m.level, m.notes
         o.price_label = PRICE_BASIS_LABELS.get(o.price_basis, o.price_basis)
         if o.price_type == "quote_required":

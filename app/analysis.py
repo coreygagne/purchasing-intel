@@ -395,7 +395,9 @@ def recommend(offers: list[Offer], tokens: list[str], specs: list[dict[str, Any]
                                f"prices (calculated; median CAD {med:,.2f}).")
     if lowest in unknown_pack:
         lowest_expl.append("This listing doesn't state a pack size; it was counted as one unit.")
-    if lowest.country != "CA":
+    if lowest.country is None:
+        lowest_expl.append("The seller's country isn't known - check where it ships from; import costs may apply.")
+    elif lowest.country != "CA":
         lowest_expl.append("Seller appears to be outside Canada - landed cost may be higher than the listed price.")
     if lowest.delivered and not lowest.delivered["complete"]:
         lowest_expl.append("Delivered cost incomplete: " + ", ".join(lowest.delivered["missing"]) + " unknown.")

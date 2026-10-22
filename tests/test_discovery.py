@@ -437,3 +437,119 @@ def test_map_searches_name_the_town_and_far_results_are_not_local():
             "website": "https://drydenelectric.example.ca/"}]
     [lead] = [l for l in disc.find_leads([], far, name="x", brand=None, category=disc.CATEGORIES["general"])]
     assert lead.market == "regional" and lead.priority > 1
+
+
+# ---------------------------------------------- from the first live runs (2026-10-22)
+
+
+def test_searches_are_for_the_item_not_the_order():
+    from app.research import _without_order_length
+    assert _without_order_length("300 ft of 300 MCM 3-conductor copper teck cable 1000V") == \
+        "300 MCM 3-conductor copper teck cable 1000V"
+    assert _without_order_length("Milwaukee 2767-20") == "Milwaukee 2767-20"
+
+
+def test_quick_plan_reaches_beyond_the_always_channels():
+    name = "300 MCM 3-conductor copper teck cable 1000V"
+    plan = disc.initial_plan(name, disc.categorize(name), "quick", alt_names=["300 kcmil 3-conductor teck"], budget=8)
+    channels = [pq.channel for pq in plan]
+    assert channels.count("wholesale") == 1 and channels.count("manufacturer") == 1
+    assert {"reviews", "distributor"} & set(channels)
+
+
+def test_live_run_shapes_become_the_right_suppliers():
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    from app.research import _snippet_details
+    from app.vendors import build_vendors
+
+    def hit(url, title, snippet, channel="dealer"):
+        return SearchHit("Tavily", "q", channel, url, title, snippet, 1, channel=channel, market="local")
+    hits = [
+        hit("https://www.facebook.com/mceacherns/", "McEachern's Tool House | Thunder Bay ON",
+            "Come down to McEachern's Tool House on 721 Vickers St N."),
+        hit("https://www.itoolhouse-example.ca/", "McEachern Tool House: HOME",
+            "721 Vickers St N, Thunder Bay, Ontario, Canada, P7C 4B8. Phone: (807) 555-0151. Email: info@itoolhouse-example.ca."),
+        hit("https://assets-us-01.kc-usercontent.com/x/teck.pdf", "Teck cable catalogue",
+            "300 MCM teck cable. 1.800.555.0101 SALES@TEXCAN.EXAMPLE", "manufacturer"),
+        hit("https://thesis.lakeheadu.ca/handle/1", "Grid study", "teck cable in Thunder Bay", "local_suppliers"),
+        hit("https://www.ieso.ca/page", "IESO market", "Ontario electricity", "local_suppliers"),
+        hit("https://electricalindustry.example.ca/news", "City Electric Supply opens branch", "It opened in June.",
+            "local_suppliers"),
+    ]
+    sources = build_sources(hits, [])
+    for s in sources:
+        _snippet_details(s)
+    vendors = build_vendors(sources, [], [], item="Milwaukee 2767-20", tokens=["2767-20"])
+    names = [v["name"] for v in vendors]
+    assert names == ["McEachern's Tool House"]  # one business, not two; no file host, school, agency or news site
+    v = vendors[0]
+    assert v["domain"] == "itoolhouse-example.ca" and v["phones"][0]["value"] == "(807) 555-0151"
+    assert v["emails"][0]["value"] == "info@itoolhouse-example.ca" and v["tier"] == "local"
+
+
+def test_one_where_to_buy_search_per_manufacturer():
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    sources = build_sources([SearchHit("Tavily", "q", "manufacturer", u, "Milwaukee 2767-20", "", 1)
+                             for u in ("https://documents.milwaukeetool.com/x", "https://www.milwaukeetool.ca/y")],
+                            ["Milwaukee"])
+    leads = disc.find_leads(sources, [], name="Milwaukee 2767-20", brand=None, category=disc.CATEGORIES["tools"])
+    assert [l.kind for l in leads].count("manufacturer") == 1
+
+
+def test_live_text_shapes_parse_correctly():
+    # shapes copied from real search results (2026-10-22): Sonepar catalogue names, a product-line size range,
+    # a parenthesised currency, and a kit whose snippet lists the bare tool it includes
+    assert [(p.amount, p.currency) for p in ex.find_prices("Price: $279.00 (USD) THIS ITEM")] == [(279.0, "USD")]
+    assert [x["label"] for x in ex.specs_in("300/3C 1KV TECK90")] == ["300 kcmil", "3-conductor", "1 kV"]
+    assert [x["label"] for x in ex.specs_in("3/0/3C 1KV TECK90")][:2] == ["3/0 AWG", "3-conductor"]
+    requested = ex.request_specs("300 MCM 3-conductor copper teck cable 1000V")[0]
+    chk = ex.spec_check(requested, "300/3C 1KV TECK90 Armoured Cable, Black. TECK90 is available in 600 and 1000V "
+                                   "constructions from #14 to 500 kcmil in copper.")
+    assert chk["conflicts"] == [] and "300 kcmil" in chk["confirmed"]
+    from app.evidence import apply_match
+    kit = _offer(1, 800.30, product_title="Milwaukee 2767-22R 18 Volt 1/2 Inch Hex Impact Wrench", price_basis="snippet",
+                 evidence_quote="WEB PRICE: $800.30 /EA/EA. Includes: (2767-20) High Torque 1/2 Impact Wrench")
+    apply_match([kit], ["2767-20"], {})
+    assert kit.match_level == "variant"
+
+
+def test_utility_pages_are_not_suppliers():
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    from app.research import _snippet_details
+    from app.vendors import build_vendors
+    [s] = build_sources([SearchHit("Tavily", "q", "local_suppliers", "https://www.synergynorth.example/supply",
+                                   "Electricity Supply", "Ontario's electricity supply mix. THUNDER BAY, ON P7A 4L3 "
+                                   "(807) 555-0111", 1, channel="local_suppliers", market="local")], [])
+    _snippet_details(s)
+    assert build_vendors([s], [], [], item="300 MCM teck cable") == []
+
+
+def test_one_business_across_its_pages_directories_and_name_variants():
+    from app.evidence import build_sources
+    from app.providers.base import SearchHit
+    from app.research import _snippet_details
+    from app.vendors import build_vendors
+
+    def hit(url, title, snippet):
+        return SearchHit("Tavily", "q", "dealer", url, title, snippet, 1, channel="dealer", market="local")
+    addr = "721 Vickers St N, Thunder Bay, Ontario, Canada, P7C 4B8. Phone: (807) 555-0151."
+    sources = build_sources([
+        hit("https://www.facebook.com/mceachern/", "McEachern's Tool House | Thunder Bay ON", "Cordless tools."),
+        hit("https://www.itoolhouse-example.ca/", "HOME | McEachern Tool House", "Largest selection of power tools."),
+        hit("https://www.itoolhouse-example.ca/products", "PRODUCTS", addr),
+        hit("https://www.novapro-example.com/", "Nova Pro", "1228 Amber Drive Thunder Bay, Ontario P7B 6M5 Phone: 807-555-0184"),
+        hit("https://www.facebook.com/novapro/", "Nova-Pro Industrial Supply LTD. | Thunder Bay ON", "Supplying quality products"),
+        hit("https://www.catb-example.on.ca/member/1", "View Member Nova Pro Industrial Supply Ltd.",
+            "Email: novapro@tbaytel.example ; Address: 1228 Amber Dr. Thunder Bay, ON. P7B 6M5"),
+        hit("https://novapro-example.betterteam.com/", "Nova-Pro Industrial Supply Ltd Careers",
+            "View job openings. 1228 Amber Dr, Thunder Bay, ON P7B 6M5"),
+    ], [])
+    for s in sources:
+        _snippet_details(s)
+    vendors = build_vendors(sources, [], [], item="Milwaukee 2767-20", tokens=["2767-20"])
+    assert sorted(v["name"] for v in vendors) == ["McEachern's Tool House", "Nova Pro"]
+    mc = next(v for v in vendors if v["name"].startswith("McEachern"))
+    assert mc["domain"] == "itoolhouse-example.ca" and mc["phones"][0]["value"] == "(807) 555-0151"

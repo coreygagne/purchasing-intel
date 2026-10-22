@@ -231,23 +231,25 @@ class ResearchEngine:
 
             # 2. Plan: category, channels, markets (Thunder Bay first) -------------------
             category = disc.categorize(identity.name, identity.category)
+            # search for the item, not the order: "300 ft of 300 MCM teck cable" -> "300 MCM teck cable"
+            search_name = _without_order_length(identity.name)
             brand = identity.brand_words[0] if identity.brand_words else None
-            alt_names = list(dict.fromkeys(disc.alt_spellings(identity.name) + ai_alt_names))[:3]
+            alt_names = list(dict.fromkeys(disc.alt_spellings(search_name) + ai_alt_names))[:3]
             stated_budget = _number(req.answers.get("budget_cad"))
             quantity = req.quantity
             rounds, deepened = disc.depth_decision(depth, category, identity.name, None, quantity, stated_budget)
             run_depth = disc.DEEPER[depth] if deepened else depth  # searched one level deeper than chosen
             cfg = disc.DEPTH_BUDGET[run_depth]
-            plan = disc.initial_plan(identity.name, category, depth, brand=brand, alt_names=alt_names,
+            plan = disc.initial_plan(search_name, category, depth, brand=brand, alt_names=alt_names,
                                      ai_queries=extra_queries, used_ok=req.used_ok, budget=rounds[0])
             seen = {disc._norm(pq) for pq in plan}
 
             # 3. Round 1 searches, Google Shopping and local map listings, together ----------
             progress(f"Searching Thunder Bay first, then wider ({len(plan)} searches via {providers.web.name})", 12)
-            local_qs = disc.local_queries(identity.name, category, cfg["maps"])
+            local_qs = disc.local_queries(search_name, category, cfg["maps"])
             hits, (listings, shopping_status), (local_businesses, local_status) = await _gather_or_raise(
                 self._search_all(providers, plan, cfg),
-                self._shopping(providers, identity.name),
+                self._shopping(providers, search_name),
                 self._local(providers, local_qs))
             all_hits = list(hits)
             all_plan = list(plan)
@@ -274,11 +276,11 @@ class ResearchEngine:
                     stop_reason = "a search provider error stopped further searching"
                     break
                 leads = disc.find_leads([s for s in sources if is_seller_source(s)], local_dicts,
-                                        name=identity.name, brand=brand, category=category, alt_names=alt_names,
+                                        name=search_name, brand=brand, category=category, alt_names=alt_names,
                                         covered_domains=covered, covered_names=covered_names,
                                         local_names=[n for n in (vd.directory_business_name(s) for s in sources
                                                                  if _in_home_city(s)) if n])
-                fplan = disc.follow_up_plan(leads, identity.name, category, rno, budget, seen)
+                fplan = disc.follow_up_plan(leads, search_name, category, rno, budget, seen)
                 if not fplan:
                     stop_reason = f"no new leads to follow after round {rno - 1}"
                     break
@@ -657,6 +659,14 @@ async def _gather_or_raise(*aws: Awaitable[Any]) -> list[Any]:
     return results
 
 
+def _without_order_length(name: str) -> str:
+    m = ex.order_length(name)
+    if not m:
+        return name
+    start, end = m["span"]
+    return re.sub(r"\s+", " ", f"{name[:start]} {name[end:]}").strip(" ,-") or name
+
+
 def _number(value: Any) -> float | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
@@ -770,7 +780,8 @@ def analyze(*, identity: dict[str, Any], sources: list[Source], offers: list[Off
             rec[key]["totals"] = mk.order_totals(by_offer[rec[key]["offer_id"]], quantity, length, home_province,
                                                  clean)
     vendors = vd.build_vendors(sources, offers, meta.get("local_businesses"), meta.get("contact_pages"),
-                               home_city=disc.HOME["city"], quantity=quantity)
+                               home_city=disc.HOME["city"], quantity=quantity, item=identity.get("name", ""),
+                               tokens=tokens)
     market = mk.market_value(offers, tokens, length)
     category = (meta.get("plan") or {}).get("category") or disc.categorize(identity.get("name", ""),
                                                                            identity.get("category")).key

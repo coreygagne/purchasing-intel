@@ -245,7 +245,7 @@ PRICE_RE = re.compile(
     r"(?P<prefix>CA\s?\$|C\s?\$|CDN\s?\$|CAD\s?\$|US\s?\$|USD\s?\$|AU\$|A\$|NZ\$|HK\$|S\$|MX\$|\$|€|£|¥|"
     r"\b(?:CAD|USD|EUR|GBP|CNY|RMB|MXN)\s)"
     r"\s?(?P<amount>" + _AMOUNT + r")"
-    r"(?:\s?(?P<suffix>CAD|USD|EUR|GBP|CNY|AUD|MXN)\b)?"
+    r"(?:\s?\(?(?P<suffix>CAD|USD|EUR|GBP|CNY|AUD|MXN)\b\)?)?"  # "$279.00 USD", "$279.00 (USD)"
     r"(?:\s?(?:-|–|to)\s?(?:CA\$|C\$|US\$|\$|€|£|¥)?\s?(?P<high>" + _AMOUNT + r"))?",
     re.I,
 )
@@ -855,6 +855,10 @@ _ORDER_LENGTH = re.compile(r"(?<![\w/.-])(?P<n>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>ft
                            r"\s+(?:of|roll|reel|spool|coil|length|cut)\b", re.I)
 _KCMIL = re.compile(r"\b(\d{3,4})\s*-?\s*(?:mcm|kcmil)\b", re.I)
 _AWG = re.compile(r"(?:#\s*)?\b(\d{1,2}|[1-4]/0)\s*-?\s*(?:awg|ga\b|gauge\b)|#\s*(\d{1,2}|[1-4]/0)\b(?!\s*-?\d)", re.I)
+_SIZE_SLASH_C = re.compile(r"(?<![\w/.])([1-4]/0|\d{1,4})/(\d{1,2})C\b", re.I)
+# "available from #14 to 500 kcmil": the sizes a product line comes in, not this listing's size
+_SIZE_RANGE = re.compile(r"(?:from\s+)?#?\s?\d[\d/]*\s*(?:awg|kcmil|mcm)?\s+(?:to|through|thru)\s+#?\s?\d[\d/]*\s*"
+                         r"(?:awg|kcmil|mcm)\b", re.I)
 _CORD = re.compile(r"(?<![\d/.])\b(18|16|14|12|10|8|6)\s*/\s*([2-5])\b(?!\s*(?:in|inch|\"|mm))", re.I)
 _MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:mm2|mm²|sq\.?\s*mm)\b", re.I)
 _CONDUCTORS = re.compile(r"\b(\d{1,2})\s*-?\s*(?:conductors?\b|cond\b\.?)|\b(\d{1,2})(?:-|/)?c\b|"
@@ -919,7 +923,21 @@ def specs_in(text: str, *, materials: bool = True) -> list[dict[str, Any]]:
         out.append(spec)
         used.append((m.start(), m.end()))
 
+    for m in _SIZE_SLASH_C.finditer(text):  # trade catalogue style: "300/3C", "3/0/3C", "12/3C"
+        size, n = m.group(1), int(m.group(2))
+        if re.fullmatch(r"[1-4]/0", size):
+            add(m, _spec("conductor size", f"{size} AWG"))
+        elif int(size) >= 250:
+            add(m, _spec("conductor size", f"{int(size)} kcmil"))
+        elif int(size) <= 18:
+            add(m, _spec("conductor size", f"{int(size)} AWG"))
+        else:
+            continue
+        if 1 <= n <= 12:
+            out.append(_conductors(n))
     for m in _KCMIL.finditer(text):
+        if any(s <= m.start() < e for s, e in used):
+            continue
         add(m, _spec("conductor size", f"{int(m.group(1))} kcmil"))
     for m in _CORD.finditer(text):
         add(m, _spec("conductor size", f"{m.group(1)} AWG"))
@@ -931,6 +949,8 @@ def specs_in(text: str, *, materials: bool = True) -> list[dict[str, Any]]:
     for m in _MM2.finditer(text):
         add(m, _spec("conductor size (mm²)", f"{m.group(1)} mm²", float(m.group(1))))
     for m in _CONDUCTORS.finditer(text):
+        if any(s <= m.start() < e for s, e in used):
+            continue  # already read with its size ("300/3C")
         n = int(m.group(1) or m.group(2) or _WORD_NUM[m.group(3).lower()])
         if 1 <= n <= 12:
             add(m, _conductors(n))
@@ -983,7 +1003,7 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 def spec_check(requested: list[dict[str, Any]], listing_text: str) -> dict[str, list[str]]:
     """Which requested specs the listing text confirms, contradicts or doesn't mention."""
-    found = specs_in(listing_text)
+    found = specs_in(_SIZE_RANGE.sub(" ", listing_text or ""))
     out: dict[str, list[str]] = {"confirmed": [], "missing": [], "conflicts": []}
     for req in requested:
         same_dim = [f for f in found if f["dim"] == req["dim"]]
@@ -1029,6 +1049,9 @@ _POSTAL = re.compile(r"\b([ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z])[ -]?(\d[ABCEGH
 _US_ZIP = re.compile(r"\b(A[KLRZ]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|"
                      r"T[NX]|UT|V[AT]|W[AIVY])\s+\d{5}(?:-\d{4})?\b")
 _BAD_EMAIL_END = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js")
+# form placeholders ("you@example.com", "name@domain.com"), not anyone's address
+_PLACEHOLDER_EMAIL = re.compile(r"@(?:example\.(?:com|org|net)|[\w-]+\.example|domain\.com|email\.com|yourdomain\.\w+)$",
+                                re.I)
 
 
 def _phone_fmt(m: re.Match) -> str:
@@ -1055,7 +1078,7 @@ def contacts_in_text(text: str, limit: int = 3) -> dict[str, list[str]]:
             phones.append(_phone_fmt(m))
     phones = phones[:limit]
     emails = [e for e in dict.fromkeys(m.group(0) for m in _EMAIL.finditer(text))
-              if not e.lower().endswith(_BAD_EMAIL_END) and "example." not in e.lower()][:limit]
+              if not e.lower().endswith(_BAD_EMAIL_END) and not _PLACEHOLDER_EMAIL.search(e)][:limit]
     addresses = []
     for m in _POSTAL.finditer(text):
         # the address is the street line before the postal code: from its street number, within the same

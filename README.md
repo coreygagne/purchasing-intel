@@ -482,7 +482,46 @@ can reach only `api.anthropic.com`, so this run verified FX conversion and page 
 - **Haiku 5.5 reading:** this run is its first live use. Its results looked usable, but one search isn't
   enough to judge the model.
 
-**Market research build (2026-10-21): built and tested against the simulated web only; not yet run live.**
+**Live verification of the market research build (2026-10-22, Tavily, quick depth, AI reading off).** Run in
+the cloud build sandbox, where the Tavily key comes from an environment network secret, supplier pages
+can't be reached (DNS), and SerpApi and Anthropic weren't available (see below). `tests/test_live_providers.py`
+passed for Tavily: a real search parses, a search limited to one site stays on it, and a full research
+completes. Then two real researches, 11 Tavily credits each:
+- **"Milwaukee 2767-20"**: 62 sources. Found Thunder Bay suppliers McEachern's Tool House and Nova-Pro
+  Industrial Supply, with phone numbers and emails copied from their own sites and search results.
+  Comparable prices: CAD 389.00 to 464.55 (4 new asking prices, all from search snippets). A 2767-22R kit
+  and a 2666-20 were kept out of the comparison.
+- **"300 ft of 300 MCM 3-conductor copper teck cable 1000V"**: 45 sources, 21 suppliers. These included Gescan,
+  Westburne and National Cable Specialists (quote on request), EECOL, Guillevin, Nedco, Lumen, Texcan,
+  Noramco and Wesco. No recommendation: no listing stated a price that could be compared for 300 ft. The
+  prices seen were for other sizes, or ended in "/ M", which can mean per metre or per 1,000 ft. The result
+  asks for quotes from named suppliers instead.
+- **Fixed from these runs, with tests:**
+  - searches used the whole request ("300 ft of …"); they now use the item;
+  - the Quick plan spent two searches each on wholesale and manufacturer, crowding out reviews and other
+    channels;
+  - the Thunder Bay electricity utility, the IESO, a university thesis, a trade-news site, an association
+    member page, a careers page and a file host holding a supplier's PDF were listed as suppliers;
+  - one shop appeared twice (its site and its Facebook page; "McEachern's" vs "McEachern"; "Nova Pro" vs
+    "Nova-Pro Industrial Supply Ltd");
+  - a 2767-22R kit whose snippet said "Includes: (2767-20)" counted as the bare tool;
+  - "available from #14 to 500 kcmil" was read as the listing's size;
+  - catalogue names like "300/3C" and "3/0/3C" weren't read as sizes;
+  - "$279.00 (USD)" lost its currency;
+  - an email domain containing "example" was dropped as a placeholder;
+  - a seller of unknown country was called "outside Canada";
+  - each manufacturer site got its own where-to-buy search;
+  - Gescan, Wesco, City Electric Supply, Noramco, SB Simpson and Nassau National Cable were added to the
+    supplier list.
+- **Still not verified live:**
+  - SerpApi: Google Shopping and Google Maps. It authenticates with a URL parameter, so a header-type network
+    secret can't carry its key.
+  - Reading supplier pages directly: unreachable from the sandbox. Works on a normal network such as the
+    Mac runs.
+  - Claude reading: network secrets are never added to api.anthropic.com. It was used live on the Mac
+    earlier.
+
+**Market research build (2026-10-21): built and tested against the simulated web.**
 Clarify-first questions, the multi-round search plan (Thunder Bay first, channels by category, follow-up
 rounds), Google Maps local listings, contact capture, supplier records, market value groups, order totals
 with HST, channel picks, quote drafts, quality themes, the import checklist and the coverage report are

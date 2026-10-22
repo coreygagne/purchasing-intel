@@ -62,6 +62,12 @@ DIRECTORY: dict[str, SupplierInfo] = {
     "texcan.com": SupplierInfo("Texcan", DISTRIBUTOR, "CA"),
     "lumen.ca": SupplierInfo("Lumen", DISTRIBUTOR, "CA"),
     "mouser.ca": SupplierInfo("Mouser (Canada site)", DISTRIBUTOR, "CA"),
+    "gescan.com": SupplierInfo("Gescan", DISTRIBUTOR, "CA"),
+    "wesco.ca": SupplierInfo("Wesco Canada", DISTRIBUTOR, "CA"),
+    "cityelectricsupply.ca": SupplierInfo("City Electric Supply (Canada)", DISTRIBUTOR, "CA"),
+    "noramco.ca": SupplierInfo("Noramco Wire & Cable", DISTRIBUTOR, "CA"),
+    "sbsimpson.com": SupplierInfo("SB Simpson", DISTRIBUTOR, "CA"),
+    "nassaunationalcable.com": SupplierInfo("Nassau National Cable", DISTRIBUTOR, "US"),
     # Canadian retailers
     "princessauto.com": SupplierInfo("Princess Auto", RETAILER, "CA"),
     "kmstools.com": SupplierInfo("KMS Tools", RETAILER, "CA"),
@@ -214,7 +220,18 @@ def _lookup(domain: str) -> SupplierInfo | None:
 
 
 _SHARED_HOSTS = ("google.com", "google.ca", "business.site", "linktr.ee", "x.com", "twitter.com", "tiktok.com",
-                 "youtube.com", "youtu.be")
+                 "youtube.com", "youtu.be",
+                 # file and content hosts: a document there belongs to whoever uploaded it, not to the host
+                 "kc-usercontent.com", "cloudfront.net", "amazonaws.com", "googleusercontent.com", "akamaized.net",
+                 "azureedge.net", "windows.net", "shopify.com", "squarespace-cdn.com", "wixstatic.com",
+                 "scribd.com", "issuu.com", "yumpu.com", "dokumen.pub")
+# public bodies, schools and encyclopedias: found by supplier searches, but they don't sell the item
+_NON_COMMERCIAL = re.compile(r"(?:^|\.)(?:gov|gc|edu|ac)\.|\.(?:gov|edu|mil)$|(?:^|\.)(?:canada|ontario)\.ca$|"
+                             r"wikipedia\.org$|^thesis\.|university|college|\bschool", re.I)
+
+
+def is_non_commercial(domain: str | None) -> bool:
+    return bool(domain and _NON_COMMERCIAL.search(domain))
 
 
 def is_platform_domain(domain: str | None) -> bool:
