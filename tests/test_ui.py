@@ -151,3 +151,15 @@ def test_pasting_a_key_on_the_setup_screen_makes_the_app_ready(servers, browser)
     assert "Anthropic spend this month: about US$0.00 of your US$10.00 monthly limit" in page.inner_text("#cost-hint")
     assert page.is_checked("input[name=depth][value=quick]")  # the low-cost depth is preselected
     page.close()
+
+
+def test_verdict_shows_price_and_next_step(servers, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900}, reduced_motion="reduce")
+    page.goto(servers["ready"] + "/#/c/1")
+    page.wait_for_selector(".lead .figure")
+    assert "CAD" in page.inner_text(".lead .figure .amount")
+    assert page.locator(".legend-box").get_attribute("open") is None  # the marks legend is folded away
+    page.click("text=Coverage")
+    page.click(".lead >> text=Suppliers & quote drafts")
+    assert page.inner_text(".tabs [aria-selected=true]") == "Suppliers & quotes"
+    page.close()

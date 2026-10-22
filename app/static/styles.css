@@ -108,6 +108,7 @@ button, input, select { font: inherit; color: inherit; }
   flex: 1; min-width: 0; border: 0; background: transparent; padding: 16px 16px; font-size: 18px; outline: none;
 }
 .compact .searchbox input { padding: 11px 14px; font-size: 16px; }
+@media (max-width: 600px) { .compact .options { display: none; } }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--rule-strong);
   background: var(--sheet); color: var(--ink); border-radius: var(--radius); padding: 8px 14px; cursor: pointer;
@@ -159,6 +160,9 @@ button, input, select { font: inherit; color: inherit; }
 .mark.quote { --c: var(--ink); }
 .mark.unknown { --c: var(--ink-3); border-style: dotted; }
 .mark.risk { --c: var(--risk); }
+.legend-box { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.legend-box summary { cursor: pointer; width: fit-content; list-style-position: inside; }
+.legend-box[open] .legend { margin-top: 8px; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px; color: var(--ink-2); }
 .legend > span { display: inline-flex; gap: 6px; align-items: center; }
 
@@ -194,9 +198,16 @@ ul.bullets li + li { margin-top: 5px; }
 /* progress */
 .progress { margin-top: 20px; }
 .progress .bar { height: 6px; background: var(--sheet-2); border-radius: 3px; overflow: hidden; }
-.progress .bar i { display: block; height: 100%; background: var(--lake); width: 0; transition: width 0.4s ease; }
+.progress .bar i { position: relative; display: block; height: 100%; background: var(--lake); width: 0; transition: width 0.6s ease;
+  overflow: hidden; }
+/* a sheen runs along the filled part while the research works, so a long step never looks frozen */
+.progress .bar i::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent); animation: sheen 1.6s ease-in-out infinite; }
+@keyframes sheen { to { transform: translateX(100%); } }
 .progress .step { margin-top: 8px; color: var(--ink-2); font-size: 14px; }
-@media (prefers-reduced-motion: reduce) { .progress .bar i { transition: none; } }
+.progress .step.swap { animation: fade-in 0.25s ease; }
+@media (prefers-reduced-motion: reduce) { .progress .bar i { transition: none; } .progress .bar i::after { animation: none; display: none; }
+  .progress .step.swap { animation: none; } }
 
 /* ------------------------------------------------------------ results header */
 .result-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 18px 0 8px; }
@@ -289,6 +300,9 @@ details > summary { list-style-position: outside; }
 .tabs button { border: 0; background: none; padding: 10px 14px; cursor: pointer; font-weight: 600; color: var(--ink-2); border-bottom: 3px solid transparent; margin-bottom: -2px; white-space: nowrap; font-size: 15px; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .tabpanel { padding: 20px 0 8px; }
+.tabpanel.swap { animation: fade-in 0.18s ease; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tabpanel.swap { animation: none; } }
 .quote-list li { padding: 8px 0; border-top: 1px solid var(--rule); }
 .quote-list li:first-child { border-top: 0; }
 .quote-list q { quotes: "\201C" "\201D"; color: var(--ink); }
@@ -344,10 +358,27 @@ form.clarify input[type="text"], form.clarify input[type="number"] {
 .choices input:checked + span { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .choices input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
 
-.lead { background: var(--sheet); border: 1px solid var(--rule); border-left: 6px solid var(--quoted); border-radius: var(--radius); padding: 16px 20px; }
+.lead { background: var(--sheet); border: 1px solid var(--rule); border-left: 6px solid var(--quoted); border-radius: var(--radius); padding: 18px 22px; }
 .lead.none { border-left-color: var(--est); }
 .lead .kind { font-size: 14px; color: var(--ink-2); font-weight: 600; }
-.lead .head { font-size: 22px; font-weight: 800; font-variation-settings: "wdth" 112; margin: 4px 0 2px; overflow-wrap: anywhere; }
+/* the verdict is a provenance mark like the price marks: it lands like an ink stamp when a result opens */
+.lead .kind.stamp { display: inline-block; color: var(--quoted); border: 2px solid currentColor; border-radius: 3px;
+  padding: 2px 8px; font-weight: 700; transform: rotate(-1.5deg); transform-origin: left center; }
+.lead.none .kind.stamp { color: var(--est); }
+.lead.enter { animation: lead-rise 0.32s ease-out both; }
+.lead.enter .kind.stamp { animation: stamp 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.25) 0.12s both; }
+@keyframes lead-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes stamp { 0% { opacity: 0; transform: rotate(-6deg) scale(1.35); }
+  60% { opacity: 1; transform: rotate(-1deg) scale(0.97); } 100% { opacity: 1; transform: rotate(-1.5deg) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .lead.enter, .lead.enter .kind.stamp { animation: none; } }
+.lead .head { font-size: 24px; font-weight: 800; font-variation-settings: "wdth" 112; margin: 8px 0 2px; overflow-wrap: anywhere; }
+.lead-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 28px; }
+.lead .figure { text-align: right; }
+.lead .figure .amount { font-size: clamp(26px, 4vw, 38px); font-weight: 800; font-variation-settings: "wdth" 120;
+  line-height: 1.05; font-variant-numeric: tabular-nums; }
+.lead .figure .amount .mark { vertical-align: middle; }
+.lead .next { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+@media (max-width: 600px) { .lead .figure { text-align: left; } }
 .lead .why { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
 .lead .why li + li { margin-top: 4px; }
 .panel.assumed { border-left: 5px solid var(--est); }

@@ -350,7 +350,8 @@ function trackJob(jobId, query) {
     if (!r.ok) { $("#search-btn").disabled = false; flash(errorNotice({ message: "Lost track of the research job (the server may have restarted). Try again." })); return; }
     const j = r.body;
     box.querySelector("i").style.width = `${j.pct}%`;
-    box.querySelector(".step").textContent = j.step;
+    const step = box.querySelector(".step");
+    if (step.textContent !== j.step) { step.textContent = j.step; step.classList.remove("swap"); void step.offsetWidth; step.classList.add("swap"); }
     if (j.status === "running") { setTimeout(tick, 700); return; }
     $("#search-btn").disabled = !(state.status && state.status.ready);
     loadStatus();  // refresh this month's spend
@@ -385,7 +386,9 @@ async function openComparison(id) {
   state.comparison = r.body;
   state.history = null;
   $("#q").value = r.body.query;
+  state.entering = true;
   renderComparison();
+  state.entering = false;
 }
 
 function renderComparison() {
@@ -421,7 +424,7 @@ function header(comp, res) {
         id.input_type === "url" ? ["From your link, identified via ", id.source, ". "] : null,
         id.model_tokens?.length ? `Model number matched: ${id.model_tokens.join(", ")}. ` : "No model number given, so equivalence isn't verified. ",
         res.quantity ? `Quantity: ${res.quantity}.` : ""),
-      h("div", { style: "margin-top:10px" }, legend())),
+      h("details", { class: "legend-box" }, h("summary", {}, "How to read the price marks"), legend())),
     h("div", { class: "actions" },
       saveBtn,
       h("button", { class: "btn", type: "button", title: "Runs a new search and adds new price observations (uses credits)",
@@ -498,24 +501,54 @@ function leadCard(plain, res) {
   if (plain.judge) {
     const pages = plain.listing_pages || [];
     const options = plain.judge === "shortlist";
-    return h("section", { class: "lead none" }, h("div", { class: "kind" }, options ? "Shortlist - pick a model first" : "For you to judge"),
+    return h("section", { class: `lead none${state.entering ? " enter" : ""}` }, h("div", { class: "kind stamp" }, options ? "Shortlist - pick a model first" : "For you to judge"),
       h("div", { class: "head" }, options ? "Options found - different models, not ranked by price" : "Listings to compare yourself - no price ranking"),
       plain.judge_note ? h("p", { class: "small", style: "margin:4px 0 8px" }, plain.judge_note) : null,
       pages.length ? h("ul", { class: "why" }, pages.map((p) => h("li", {}, link(p.url, p.supplier), p.local ? " (Thunder Bay)" : "",
         `: ${p.title}`, p.price != null ? ` - ${p.price_kind === "current_bid" ? "current bid " : ""}${money(p.price, p.currency)}${p.many ? " seen on this page (one of many ads)" : ""}` : "",
         h("span", { class: "muted" }, ` · ${day(p.observed_at)}`)))) : null,
-      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))));
+      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
+      h("div", { class: "next" }, h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")));
   }
   if (!plain.lead) {
-    return h("section", { class: "lead none" }, h("div", { class: "kind" }, "Recommendation"),
-      h("div", { class: "head" }, "Not enough evidence to recommend a supplier yet"),
-      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))));
+    return h("section", { class: `lead none${state.entering ? " enter" : ""}` }, h("div", { class: "kind stamp" }, "No recommendation yet"),
+      h("div", { class: "head" }, "Not enough evidence to recommend a supplier"),
+      h("ul", { class: "why" }, (plain.needed || []).map((n) => h("li", {}, n))),
+      h("div", { class: "next" }, h("button", { class: "btn primary", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")));
   }
-  return h("section", { class: "lead" },
-    h("div", { class: "kind" }, "Recommended: best-supported option"),
-    h("div", { class: "head" }, plain.lead.supplier, " ", link(plain.lead.url, "Open listing", "small")),
+  const row = (plain.comparison || []).find((r) => r.offer_id === plain.lead.offer_id) || {};
+  const vendor = (res.vendors || []).find((v) => (v.offer_ids || []).includes(plain.lead.offer_id));
+  const phone = vendor?.phones?.[0]?.value;
+  return h("section", { class: `lead${state.entering ? " enter" : ""}` },
+    h("div", { class: "lead-top" },
+      h("div", {},
+        h("div", { class: "kind stamp" }, "Recommended: best-supported option"),
+        h("div", { class: "head" }, plain.lead.supplier),
+        row.tier ? h("div", { class: "small muted" }, row.tier) : null),
+      row.price ? h("div", { class: "figure" },
+        h("div", { class: "amount" }, row.price, " ", mark(row.confidence === "low" ? "snippet" : "quoted")),
+        row.total_pre_tax != null ? h("div", { class: "small" }, `${money(row.total_pre_tax, "CAD")} before tax`,
+          res.quantity ? ` for ${res.quantity}` : "", row.total_complete ? "" : ", some costs unknown") : null) : null),
+    h("div", { class: "next" },
+      h("a", { class: "btn primary", href: plain.lead.url, target: "_blank", rel: "noopener" }, "Open listing"),
+      phone ? h("a", { class: "btn", href: telHref(phone) }, `Call ${phone}`) : null,
+      h("button", { class: "btn", type: "button", onclick: () => goToTab("suppliers") }, "Suppliers & quote drafts")),
     h("ul", { class: "why" }, plain.lead.why.map((w) => h("li", {}, w))),
     h("p", { class: "small muted", style: "margin:8px 0 0" }, plain.distinction));
+}
+
+function telHref(phone) {
+  return "tel:" + phone.replace(/\s*(ext\.?|x)\s*\d+.*$/i, "").replace(/[^\d+]/g, "");
+}
+
+// Jump to a tab below (the next step after reading the verdict)
+function goToTab(k) {
+  const bar = document.querySelector(".tabs");
+  if (!bar) return;
+  const btn = [...bar.querySelectorAll("button")][TABS.findIndex(([key]) => key === k)];
+  if (btn) btn.click();
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  bar.scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start" });
 }
 
 function picksTable(plain) {
@@ -726,6 +759,7 @@ function fillTab(panel, res) {
   const f = { suppliers: suppliersTab, quality: qualityTab, channels: channelsTab, import: importTab, coverage: coverageTab,
     history: historyTab, sources: sourcesTab }[state.tab] || suppliersTab;
   panel.replaceChildren(f(res));
+  panel.classList.remove("swap"); void panel.offsetWidth; panel.classList.add("swap");
 }
 function srcRef(res, id) {
   const s = res.sources.find((x) => x.id === id);
