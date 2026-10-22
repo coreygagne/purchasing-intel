@@ -69,3 +69,14 @@ def test_clear_recent_searches_keeps_saved_comparisons_and_spend(tmp_path):
         assert c.get("/api/searches/recent").json() == []
         assert [x["title"] for x in c.get("/api/comparisons?saved=true").json()] == ["Keep me"]
         assert db.month_spend() == 0.02  # the month's spend still counts cleared searches
+
+
+def test_lists_show_each_comparisons_outcome(tmp_path):
+    with make_client(tmp_path) as c:
+        job = research(c)
+        recent = c.get("/api/searches/recent").json()[0]
+        assert recent["verdict"]["kind"] in ("ok", "hold") and recent["verdict"]["text"]
+        cid = job["comparison_id"]
+        c.patch(f"/api/comparisons/{cid}", json={"saved": True})
+        saved = c.get("/api/comparisons?saved=true").json()[0]
+        assert saved["verdict"] == recent["verdict"]

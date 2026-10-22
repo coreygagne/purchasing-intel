@@ -44,6 +44,21 @@ class ResearchBody(BaseModel):
     answers: dict[str, str | int | float | bool | None] | None = None
 
 
+def verdict(result: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A comparison's outcome in a few words, for the saved and recent lists."""
+    plain = (result or {}).get("recommendation")
+    if not plain:
+        return None
+    if plain.get("lead"):
+        row = next((r for r in plain.get("comparison", []) if r.get("offer_id") == plain["lead"]["offer_id"]), {})
+        return {"kind": "ok", "text": row.get("price") or "Recommended", "who": plain["lead"].get("supplier")}
+    if plain.get("judge") == "shortlist":
+        return {"kind": "hold", "text": "Shortlist"}
+    if plain.get("judge"):
+        return {"kind": "hold", "text": "For you to judge"}
+    return {"kind": "hold", "text": "Quote needed"}
+
+
 class PhotoBody(BaseModel):
     # a data URL from the browser ("data:image/jpeg;base64,..."), already shrunk to about 1600 px by the page
     image: str = Field(min_length=20, max_length=8_000_000)
@@ -323,7 +338,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     # ------------------------------------------------------------- comparisons
     @app.get("/api/comparisons")
     def list_comparisons(saved: bool = False, limit: int = 50) -> list[dict[str, Any]]:
-        return db.list_comparisons(saved_only=saved, limit=min(limit, 200))
+        rows = db.list_comparisons(saved_only=saved, limit=min(limit, 200))
+        results = db.results_for([r["id"] for r in rows])
+        return [r | {"verdict": verdict(results.get(r["id"]))} for r in rows]
 
     @app.get("/api/comparisons/{cid}")
     def get_comparison(cid: int) -> dict[str, Any]:
@@ -396,7 +413,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.get("/api/searches/recent")
     def recent(limit: int = 20) -> list[dict[str, Any]]:
-        return db.recent_searches(min(limit, 100))
+        rows = db.recent_searches(min(limit, 100))
+        results = db.results_for([r["comparison_id"] for r in rows if r["comparison_id"]])
+        return [r | {"verdict": verdict(results.get(r["comparison_id"]))} for r in rows]
 
     # ------------------------------------------------------------------ static
     @app.get("/")

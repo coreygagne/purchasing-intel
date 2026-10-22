@@ -232,18 +232,25 @@ async function renderHome() {
   view.append(h("div", { class: "grid-2 home-lists", style: "margin-top:18px" },
     h("section", { class: "panel" }, h("h2", {}, "Saved comparisons"),
       savedList.length ? savedList.map((c) => h("a", { class: "listlink", href: `#/c/${c.id}` },
-        h("span", { class: "t" }, c.title), h("span", { class: "d" }, `researched ${day(c.last_researched_at)}`)))
+        h("span", { class: "t" }, c.title, c.verdict?.who ? h("span", { class: "who" }, c.verdict.who) : null),
+        h("span", { class: "d" }, verdictStamp(c.verdict), `researched ${day(c.last_researched_at)}`)))
         : h("p", { class: "empty" }, "Nothing saved yet. Open a comparison and choose Save to keep it here.")),
     h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", {}, "Recent searches"),
       recentList.length ? h("button", { class: "btn small", type: "button", onclick: clearRecent }, "Clear list") : null),
       recentList.length ? recentList.map((s) => s.comparison_id
-        ? h("a", { class: "listlink", href: `#/c/${s.comparison_id}` }, h("span", { class: "t" }, s.query),
-          h("span", { class: "d" }, ago(s.created_at)))
+        ? h("a", { class: "listlink", href: `#/c/${s.comparison_id}` },
+          h("span", { class: "t" }, s.query, s.verdict?.who ? h("span", { class: "who" }, s.verdict.who) : null),
+          h("span", { class: "d" }, verdictStamp(s.verdict), ago(s.created_at)))
         : h("div", { class: "listlink" }, h("span", { class: "t" }, s.query),
           h("span", { class: s.status === "failed" ? "tag-failed" : "d" },
-            s.status === "failed" ? "failed" : s.status)))
+            s.status === "failed" ? verdictStamp({ kind: "fail", text: "Failed" }) : s.status)))
         : h("p", { class: "empty" }, "Your searches will appear here."))),
     h("div", { style: "margin-top:18px" }, providerPanel()));
+}
+
+// A comparison's outcome as a small ink stamp: the recommended price, or what's still needed
+function verdictStamp(v) {
+  return v ? h("span", { class: `stamp-sm ${v.kind}` }, v.text) : null;
 }
 
 async function clearRecent() {

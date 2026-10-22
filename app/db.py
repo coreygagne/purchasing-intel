@@ -248,6 +248,16 @@ class Database:
         with self.tx() as c:
             c.execute(f"UPDATE comparisons SET {', '.join(sets)} WHERE id = ?", args)
 
+    def results_for(self, ids: list[int]) -> dict[int, dict[str, Any]]:
+        """Stored results by comparison id (for showing each one's outcome in lists)."""
+        ids = [int(i) for i in ids if i is not None][:100]
+        if not ids:
+            return {}
+        with self.tx() as c:
+            rows = c.execute(f"SELECT id, result_json FROM comparisons WHERE id IN ({','.join('?' * len(ids))})",
+                             ids).fetchall()
+        return {r["id"]: json.loads(r["result_json"]) for r in rows}
+
     def list_comparisons(self, saved_only: bool = False, limit: int = 50) -> list[dict[str, Any]]:
         sql = ("SELECT id, title, query, product_key, saved, notes, created_at, last_researched_at, updated_at"
                " FROM comparisons")
