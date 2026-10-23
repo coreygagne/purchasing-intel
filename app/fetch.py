@@ -16,7 +16,9 @@ import asyncio
 import ipaddress
 import socket
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import AsyncIterator
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
@@ -73,11 +75,12 @@ def _public_looking_name(host: str) -> bool:
     return "." in h and not h.endswith(_INTERNAL_SUFFIXES) and h != "localhost"
 
 
-async def check_url(url: str, *, allow_unresolved: bool = False) -> None:
-    """Raise BlockedURL unless `url` is a public http(s) address on a standard port.
+async def checked_public_ip(url: str, *, allow_unresolved: bool = False) -> str | None:
+    """Validate a URL and return a public IP to use for the connection.
 
     `allow_unresolved`: on proxy-only networks the server can't resolve public names itself; then a
-    public-looking host name (not an IP, not an internal suffix) is allowed and the proxy resolves it."""
+    public-looking host name (not an IP, not an internal suffix) is allowed and the proxy resolves it.
+    In that explicit trust mode, return None when the local DNS lookup fails."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise BlockedURL("only http(s) links can be read")
@@ -99,19 +102,28 @@ async def check_url(url: str, *, allow_unresolved: bool = False) -> None:
             ips = await resolve_host(host)
         except (OSError, UnicodeError) as exc:
             if allow_unresolved and _public_looking_name(host):
-                return
+                return None
             if _public_looking_name(host):
                 raise Unresolvable(f"could not resolve {host}") from exc
             raise BlockedURL(f"could not resolve {host}") from exc
     if not ips or not all(_public(ip) for ip in ips):
         raise BlockedURL(f"{host} points to a private or internal network address")
+    return ips[0]
+
+
+async def check_url(url: str, *, allow_unresolved: bool = False) -> None:
+    """Raise BlockedURL unless `url` is a public http(s) address on a standard port."""
+    await checked_public_ip(url, allow_unresolved=allow_unresolved)
 
 
 class PageFetcher:
     def __init__(self, client: httpx.AsyncClient, *, user_agent: str, timeout_s: float,
-                 max_bytes: int, respect_robots: bool = True, allow_unresolved: bool = False):
+                 max_bytes: int, respect_robots: bool = True, allow_unresolved: bool = False,
+                 pin_dns: bool = True, pin_transport: httpx.AsyncBaseTransport | None = None):
         self.client = client
         self.allow_unresolved = allow_unresolved
+        self.pin_dns = pin_dns
+        self.pin_transport = pin_transport
         self.user_agent = user_agent
         self.timeout_s = timeout_s
         self.max_bytes = max_bytes
@@ -120,26 +132,48 @@ class PageFetcher:
         self._robots: dict[str, tuple[float, RobotFileParser | None, bool, bool]] = {}
         self._robots_lock = asyncio.Lock()
 
+    @asynccontextmanager
+    async def _request_client(self, pin: bool) -> AsyncIterator[httpx.AsyncClient]:
+        if not pin:
+            yield self.client
+            return
+        # A separate client prevents a connection to one seller's IP from being
+        # reused for another seller with a different TLS certificate.
+        async with httpx.AsyncClient(trust_env=False, transport=self.pin_transport) as client:
+            yield client
+
     async def _get(self, url: str, *, accept: str) -> tuple[httpx.Response, bytes, str]:
         """GET with manual, checked redirects. Returns (response, body, final_url)."""
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            await check_url(current, allow_unresolved=self.allow_unresolved)
-            async with self.client.stream(
-                "GET", current, timeout=self.timeout_s, follow_redirects=False,
-                headers={"User-Agent": self.user_agent, "Accept": accept, "Accept-Language": "en-CA,en;q=0.9"},
-            ) as resp:
-                if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
-                    current = urljoin(current, resp.headers["location"])
-                    continue
-                chunks, size = [], 0
-                if resp.status_code < 400:
-                    async for chunk in resp.aiter_bytes():
-                        chunks.append(chunk)
-                        size += len(chunk)
-                        if size > self.max_bytes:
-                            break
-                return resp, b"".join(chunks)[: self.max_bytes], current
+            ip = await checked_public_ip(current, allow_unresolved=self.allow_unresolved)
+            parts = urlsplit(current)
+            pin = self.pin_dns and ip is not None
+            target = current
+            headers = {"User-Agent": self.user_agent, "Accept": accept, "Accept-Language": "en-CA,en;q=0.9"}
+            extensions = None
+            if pin:
+                address = f"[{ip}]" if ":" in ip else ip
+                target = parts._replace(netloc=address + (f":{parts.port}" if parts.port else "")).geturl()
+                headers["Host"] = parts.netloc
+                if parts.scheme == "https":
+                    extensions = {"sni_hostname": parts.hostname}
+            async with self._request_client(pin) as client:
+                async with client.stream(
+                    "GET", target, timeout=self.timeout_s, follow_redirects=False,
+                    headers=headers, extensions=extensions,
+                ) as resp:
+                    if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
+                        current = urljoin(current, resp.headers["location"])
+                        continue
+                    chunks, size = [], 0
+                    if resp.status_code < 400:
+                        async for chunk in resp.aiter_bytes():
+                            chunks.append(chunk)
+                            size += len(chunk)
+                            if size > self.max_bytes:
+                                break
+                    return resp, b"".join(chunks)[: self.max_bytes], current
         raise BlockedURL("too many redirects")
 
     async def _allowed(self, url: str) -> tuple[bool, str | None, bool]:
