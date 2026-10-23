@@ -21,7 +21,7 @@ from app.providers.tavily import TavilyProvider
 from app.research import ResearchEngine, ResearchRequest
 
 SETTINGS = load_settings()
-LIVE = bool(os.environ.get("PI_NETWORK_TESTS"))
+LIVE = os.environ.get("PI_NETWORK_TESTS") == "1"
 ITEM = "Milwaukee 2767-20"
 
 needs_tavily = pytest.mark.skipif(not (LIVE and SETTINGS.tavily_api_key),
