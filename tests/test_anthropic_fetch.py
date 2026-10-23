@@ -104,7 +104,7 @@ async def test_fetcher_error_block_and_non_text_and_api_errors():
 
 def page_fetcher(handler):
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return PageFetcher(client, user_agent="test-agent", timeout_s=2, max_bytes=100_000)
+    return PageFetcher(client, user_agent="test-agent", timeout_s=2, max_bytes=100_000, pin_dns=False)
 
 
 async def test_network_failures_are_tagged_but_site_refusals_are_not(monkeypatch):
