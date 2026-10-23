@@ -126,10 +126,13 @@ redirect hop:
 - http(s) only, on ports 80/443, with no embedded credentials;
 - the host resolves (via the server's DNS) to public internet addresses only, so localhost, the office LAN and
   cloud-metadata addresses are refused.
+Direct page requests connect to the validated public IP, keeping the original host name for the HTTP request
+and HTTPS certificate check. This prevents the connection from resolving the host a second time.
 
 If the server can't resolve a host name, that page isn't read. On proxy-only networks, where an HTTPS proxy
 resolves names for the server, set `FETCH_TRUST_PROXY_DNS=true` to allow public-looking names; internal
-names and IP addresses stay blocked. Each page read and each whole research job also has a time limit
+names and IP addresses stay blocked. In this mode, the proxy's DNS answer cannot be checked by the app; use
+only a trusted proxy. Each page read and each whole research job also has a time limit
 (`FETCH_TIMEOUT_S`, `JOB_TIMEOUT_S`).
 
 **Fallback reading through Anthropic web fetch** (`FETCH_VIA_ANTHROPIC=true`, needs the Anthropic key). Some
@@ -477,8 +480,8 @@ aren't. The changes:
 
 **Built and tested against the simulated web:** everything described above. An independent code review
 (two rounds) found accuracy and safety issues. They were fixed and covered by regression tests
-(`tests/test_review_fixes.py`), and mutation checks confirm the key tests fail if a fix is reverted. One
-residual risk is accepted for Phase 1 and listed under limitations (DNS rebinding).
+(`tests/test_review_fixes.py`), and mutation checks confirm the key tests fail if a fix is reverted. The
+proxy DNS trust exception is listed under limitations.
 
 **Live end-to-end test (2026-10-20, Anthropic web search + Claude Opus 5.5, quick depth).** The full workflow
 ran against the live provider: request → 6 real web searches → 40 real sources → evidence extraction with
@@ -703,9 +706,9 @@ provider key is still needed to see real prices.
 - **Shipping.** Used only when a listing states it. A foreign seller's "free shipping" is not assumed to apply
   to Canada; Google Shopping Canada delivery terms are. Otherwise shipping is unknown, or your assumption.
 - **No login or user accounts.** Saved comparisons are shared by everyone using the server.
-- **Page-fetch safety.** Host names are checked against private/internal addresses before each request, but
-  the connection resolves the name again, so a deliberately "rebinding" DNS server could still slip through.
-  Keep the server on a trusted network.
+- **Page-fetch safety.** Direct requests connect to the checked public IP, so DNS rebinding between validation
+  and connection cannot redirect them to an internal address. With `FETCH_TRUST_PROXY_DNS=true`, a configured
+  proxy resolves names the app cannot resolve locally; use only a trusted proxy for that mode.
 - **Pure-number model numbers** (e.g. `8210`) can match unrelated numbers in a listing, such as an item
   number. Use the brand plus model ("3M 8210") for best results.
 
