@@ -47,7 +47,7 @@ class Filters(BaseModel):
 
 class ResearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=600)
-    depth: str = "standard"
+    depth: Literal["quick", "standard", "deep"] = "standard"
     quantity: int | None = Field(default=None, ge=1, le=10_000_000)
     force: bool = False
     comparison_id: int | None = None
@@ -278,8 +278,18 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(400, "Enter a product name, model number, description or URL.")
         # a Thunder Bay-only (or outside-only) search is a different search from the same words everywhere
         normalized = ex.normalize_query(query) + ("" if body.area == "both" else f" [{body.area}]")
+        if body.answers:
+            db.save_answers(cl.key_for(query), query, {k: v for k, v in body.answers.items() if len(k) <= 40})
+        applied = cl.apply_answers(query, db.get_answers(cl.key_for(query)), body.quantity)
         if not body.force and body.comparison_id is None:
-            dup = db.find_recent_comparison(normalized, settings.duplicate_window_hours)
+            duplicate_inputs = {
+                "depth": body.depth,
+                "quantity": applied["quantity"],
+                "answers": applied["answers"],
+                "filters": body.filters.model_dump(exclude_none=True) if body.filters else {},
+                "used_ok": applied["used_ok"] and not (body.filters and body.filters.condition == "new"),
+            }
+            dup = db.find_recent_comparison(normalized, settings.duplicate_window_hours, duplicate_inputs)
             if dup:
                 return {"duplicate": dup, "message": "This was researched recently. Open the saved result, or "
                                                     "refresh to search again (uses search credits)."}
@@ -293,9 +303,6 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                     "message": f"This month's spending limit of US${settings.monthly_budget_usd:.2f} is reached "
                                f"(about US${spent:.2f} used, estimated). New research starts again on the 1st, "
                                "or raise PI_MONTHLY_BUDGET_USD in the .env file and restart."})
-        if body.answers:
-            db.save_answers(cl.key_for(query), query, {k: v for k, v in body.answers.items() if len(k) <= 40})
-        applied = cl.apply_answers(query, db.get_answers(cl.key_for(query)), body.quantity)
         search_id = db.create_search(query, normalized, ex.classify_input(query), body.depth)
         # Forget finished jobs after a while (results live in the database, not here)
         for jid in [j.id for j in jobs.values() if j.status != "running" and len(jobs) > 200]:
