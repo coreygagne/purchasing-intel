@@ -273,16 +273,31 @@ class Database:
             cur = c.execute("DELETE FROM comparisons WHERE id = ?", (comparison_id,))
             return cur.rowcount > 0
 
-    def find_recent_comparison(self, normalized: str, within_hours: int) -> dict[str, Any] | None:
+    def find_recent_comparison(self, normalized: str, within_hours: int,
+                               request: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Reuse a result only when its research inputs match this request.
+
+        Several comparisons can share the same words, so check every recent one
+        instead of only the most recent result for that query.
+        """
         cutoff = iso(utcnow() - timedelta(hours=within_hours))
         with self.tx() as c:
-            row = c.execute(
-                "SELECT id, title, last_researched_at FROM comparisons"
+            rows = c.execute(
+                "SELECT id, title, last_researched_at, result_json FROM comparisons"
                 " WHERE normalized_query = ? AND last_researched_at >= ?"
-                " ORDER BY last_researched_at DESC LIMIT 1",
+                " ORDER BY last_researched_at DESC, id DESC",
                 (normalized, cutoff),
-            ).fetchone()
-        return dict(row) if row else None
+            ).fetchall()
+        for row in rows:
+            result = json.loads(row["result_json"])
+            if request is not None and any(
+                (result.get("plan") or {}).get("used_ok") != value if key == "used_ok"
+                else result.get(key) != value
+                for key, value in request.items()
+            ):
+                continue
+            return {key: row[key] for key in ("id", "title", "last_researched_at")}
+        return None
 
     # ------------------------------------------------------------ observations
     def add_observations(self, rows: list[dict[str, Any]]) -> int:

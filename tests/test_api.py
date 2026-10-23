@@ -138,6 +138,37 @@ def test_duplicate_detection_and_refresh(tmp_path):
         assert len({o["search_id"] for o in hist["observations"]}) == 2
 
 
+def test_duplicate_only_for_matching_research_inputs(tmp_path):
+    with make_client(tmp_path) as c:
+        first = research(c, depth="quick", quantity=1, filters={"condition": "new"},
+                         answers={"used_ok": "new only"})["comparison_id"]
+        same = c.post("/api/research", json={"query": PRODUCT, "depth": "quick", "quantity": 1,
+                                              "filters": {"condition": "new"}}).json()
+        assert same["duplicate"]["id"] == first  # saved answers apply to the next request
+
+        changed_depth = research(c, depth="standard", quantity=1, filters={"condition": "new"})
+        assert changed_depth["comparison_id"] != first
+        changed_quantity = research(c, depth="quick", quantity=2, filters={"condition": "new"})
+        assert changed_quantity["comparison_id"] not in {first, changed_depth["comparison_id"]}
+        changed_filter = research(c, depth="quick", quantity=1, filters={"condition": "used"})
+        assert changed_filter["comparison_id"] not in {first, changed_depth["comparison_id"],
+                                                       changed_quantity["comparison_id"]}
+        again = c.post("/api/research", json={"query": PRODUCT, "depth": "quick", "quantity": 1,
+                                               "filters": {"condition": "new"}}).json()
+        assert again["duplicate"]["id"] == first  # match an older variant, not just the newest result
+
+        changed_answer = research(c, depth="quick", quantity=1, filters={"condition": "new"},
+                                  answers={"needed_by": "next week"})
+        assert changed_answer["comparison_id"] not in {first, changed_depth["comparison_id"],
+                                                       changed_quantity["comparison_id"],
+                                                       changed_filter["comparison_id"]}
+
+
+def test_research_rejects_unknown_depth(tmp_path):
+    with make_client(tmp_path) as c:
+        assert c.post("/api/research", json={"query": PRODUCT, "depth": "extreme"}).status_code == 422
+
+
 def test_history_chart_only_with_enough_data(tmp_path):
     with make_client(tmp_path) as c:
         cid = research(c)["comparison_id"]

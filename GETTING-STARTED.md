@@ -38,7 +38,7 @@ the API Keys page and create a new one.
 
 ## Step 2: Download the app (3 minutes)
 
-1. Go to https://github.com/coreygagne/purchasing-intel and sign in to GitHub (it's a private project).
+1. Go to https://github.com/coreygagne/purchasing-intel. The project is public, so you can download it without signing in.
 2. Click the green **Code** button, then **Download ZIP**.
 3. Find the download in your **Downloads** folder.
    - **Mac:** Safari usually unzips it for you into a folder named **purchasing-intel-main**. If you see a

@@ -232,7 +232,7 @@ async def test_ai_quality_points_cannot_add_statistics():
 async def test_fetcher_blocks_internal_and_odd_urls(url, expect):
     calls = []
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: calls.append(r) or httpx.Response(200, text="x")))
-    f = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False)
+    f = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False, pin_dns=False)
     r = await f.fetch(url)
     assert not r.ok and expect in r.error and calls == []
 
@@ -243,9 +243,26 @@ async def test_fetcher_blocks_redirect_into_private_network():
             return httpx.Response(302, headers={"location": "http://10.0.0.7/secret"})
         raise AssertionError("must not reach the private address")
     f = PageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(handler)), user_agent="t", timeout_s=2,
-                    max_bytes=1000, respect_robots=False)
+                    max_bytes=1000, respect_robots=False, pin_dns=False)
     r = await f.fetch("https://shop.example.ca/p")
     assert not r.ok and "private or internal" in r.error
+
+
+async def test_fetcher_connects_to_the_checked_ip_with_original_host_and_sni():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, text="<html>ok</html>", headers={"content-type": "text/html"})
+
+    f = PageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(lambda r: pytest.fail("un-pinned request"))),
+                    user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False,
+                    pin_transport=httpx.MockTransport(handler))
+    result = await f.fetch("https://shop.example.ca:443/p")
+    assert result.ok and len(seen) == 1
+    assert seen[0].url.host == "93.184.216.34"  # the test resolver's validated public address
+    assert seen[0].headers["host"] == "shop.example.ca:443"
+    assert seen[0].extensions["sni_hostname"] == "shop.example.ca"
 
 
 def test_private_url_input_is_not_fetched(tmp_path):
@@ -417,7 +434,7 @@ async def test_proxy_dns_option_allows_public_names_only(monkeypatch):
     client = httpx.AsyncClient(transport=httpx.MockTransport(
         lambda r: calls.append(str(r.url)) or httpx.Response(200, text="<html>ok</html>",
                                                              headers={"content-type": "text/html"})))
-    strict = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False)
+    strict = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False, pin_dns=False)
     assert "could not resolve" in (await strict.fetch("https://www.walmart.com/ip/1")).error
     trusting = PageFetcher(client, user_agent="t", timeout_s=2, max_bytes=1000, respect_robots=False,
                            allow_unresolved=True)
