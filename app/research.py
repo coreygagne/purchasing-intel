@@ -186,7 +186,8 @@ class ResearchEngine:
             fetcher = PageFetcher(client, user_agent=self.settings.fetch_user_agent,
                                   timeout_s=self.settings.fetch_timeout_s, max_bytes=self.settings.fetch_max_bytes,
                                   respect_robots=self.settings.respect_robots_txt,
-                                  allow_unresolved=self.settings.fetch_trust_proxy_dns)
+                                  allow_unresolved=self.settings.fetch_trust_proxy_dns,
+                                  pin_dns=self.transport is None)
             # Used only for what this server can't connect to itself (never for a site's own refusal)
             ai_fetcher = (AnthropicFetcher(self.settings.anthropic_api_key or "",
                                            model=self.settings.anthropic_fetch_model or self.settings.anthropic_model,
