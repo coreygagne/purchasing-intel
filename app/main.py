@@ -30,6 +30,7 @@ from .db import Database, iso
 from .export import comparison_xlsx, offers_csv
 from .llm import LlmError
 from .providers import SETUP_INSTRUCTIONS, provider_status
+from .quote_projects import evaluate as evaluate_quote_project, rfq_text
 from .research import ANALYSIS_VERSION, ResearchEngine, ResearchError, ResearchRequest, observation_rows, reanalyze
 from .three_quotes import supplier_key, workflow
 
@@ -181,6 +182,50 @@ class WatchBody(BaseModel):
     enabled: bool = False
     interval_days: int = Field(default=7, ge=1, le=90)
     max_runs_per_month: int = Field(default=4, ge=1, le=20)
+
+
+class QuoteProjectItem(BaseModel):
+    id: str = Field(min_length=1, max_length=60, pattern=r"^[a-zA-Z0-9_-]+$")
+    part: str = Field(default="", max_length=120)
+    description: str = Field(min_length=2, max_length=500)
+    quantity: float = Field(gt=0, le=10_000_000)
+    unit: str = Field(min_length=1, max_length=30)
+
+
+class QuoteProjectLine(BaseModel):
+    unit_price_cad: float | None = Field(default=None, ge=0, le=100_000_000)
+    part: str = Field(default="", max_length=120)
+    note: str = Field(default="", max_length=500)
+
+
+class QuoteProjectSupplier(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: str = Field(default="", max_length=300)
+    phone: str = Field(default="", max_length=100)
+    source: str = Field(default="", max_length=250)
+    valid_until: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    shipping_cad: float | None = Field(default=None, ge=0, le=100_000_000)
+    specs_confirmed: bool = False
+    notes: str = Field(default="", max_length=2000)
+    lines: dict[str, QuoteProjectLine] = Field(default_factory=dict)
+
+
+class QuoteProjectBody(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    ship_to: str = Field(default="Thunder Bay, Ontario", max_length=250)
+    items: list[QuoteProjectItem] = Field(min_length=1, max_length=100)
+    suppliers: list[QuoteProjectSupplier] = Field(default_factory=list, max_length=30)
+
+
+def check_quote_project(project: dict[str, Any]) -> None:
+    ids = {item["id"] for item in project["items"]}
+    if len(ids) != len(project["items"]):
+        raise HTTPException(400, "Item IDs must be unique")
+    if any(set(s["lines"]) - ids for s in project["suppliers"]):
+        raise HTTPException(400, "Supplier price refers to an unknown item")
+    names = [re.sub(r"\s+", " ", s["name"].strip().casefold()) for s in project["suppliers"]]
+    if len(names) != len(set(names)):
+        raise HTTPException(400, "Each supplier can appear only once")
 
 
 @dataclass
@@ -480,6 +525,34 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def save_supplier_profile(body: SupplierProfileBody) -> dict[str, Any]:
         return db.put_supplier_profile(body.model_dump())
 
+    @app.get("/api/quote-projects")
+    def list_quote_projects() -> list[dict[str, Any]]:
+        return db.list_quote_projects()
+
+    @app.get("/api/quote-projects/{project_id}")
+    def get_quote_project(project_id: int) -> dict[str, Any]:
+        project = db.get_quote_project(project_id)
+        if not project:
+            raise HTTPException(404, "Quote project not found")
+        return evaluate_quote_project(project) | {"rfq_text": rfq_text(project)}
+
+    @app.post("/api/quote-projects")
+    def create_quote_project(body: QuoteProjectBody) -> dict[str, Any]:
+        project = body.model_dump()
+        check_quote_project(project)
+        project_id = db.save_quote_project(project)
+        return get_quote_project(project_id)
+
+    @app.put("/api/quote-projects/{project_id}")
+    def update_quote_project(project_id: int, body: QuoteProjectBody) -> dict[str, Any]:
+        project = body.model_dump()
+        check_quote_project(project)
+        try:
+            db.save_quote_project(project, project_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return get_quote_project(project_id)
+
     @app.put("/api/comparisons/{cid}/account-prices")
     def save_account_price(cid: int, body: AccountPriceBody) -> dict[str, Any]:
         comp = db.get_comparison(cid)
@@ -623,7 +696,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     # ------------------------------------------------------------------ static
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
