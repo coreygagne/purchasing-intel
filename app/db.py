@@ -145,6 +145,14 @@ CREATE TABLE IF NOT EXISTS supplier_quotes (
 );
 CREATE INDEX IF NOT EXISTS idx_supplier_quotes_comparison ON supplier_quotes(comparison_id);
 
+CREATE TABLE IF NOT EXISTS quote_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    project_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS comparison_watches (
     comparison_id INTEGER PRIMARY KEY REFERENCES comparisons(id) ON DELETE CASCADE,
     enabled INTEGER NOT NULL DEFAULT 0,
@@ -249,6 +257,31 @@ class Database:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------- quote projects
+    def list_quote_projects(self) -> list[dict[str, Any]]:
+        with self.tx() as c:
+            rows = c.execute("SELECT id, title, updated_at FROM quote_projects ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    def get_quote_project(self, project_id: int) -> dict[str, Any] | None:
+        with self.tx() as c:
+            row = c.execute("SELECT * FROM quote_projects WHERE id = ?", (project_id,)).fetchone()
+        return {**json.loads(row["project_json"]), "id": row["id"], "updated_at": row["updated_at"]} if row else None
+
+    def save_quote_project(self, project: dict[str, Any], project_id: int | None = None) -> int:
+        now = iso()
+        data = json.dumps(project)
+        with self.tx() as c:
+            if project_id is not None:
+                cur = c.execute("UPDATE quote_projects SET title = ?, project_json = ?, updated_at = ? WHERE id = ?",
+                                (project["title"], data, now, project_id))
+                if not cur.rowcount:
+                    raise ValueError("Quote project not found")
+                return project_id
+            cur = c.execute("INSERT INTO quote_projects (title, project_json, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                            (project["title"], data, now, now))
+            return int(cur.lastrowid)
 
     # ------------------------------------------------------------- comparisons
     def save_comparison(self, *, title: str, query: str, normalized: str, product_key: str | None,

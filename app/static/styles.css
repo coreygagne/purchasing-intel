@@ -502,3 +502,12 @@ table.picks td:first-child { min-width: 150px; }
 .vgrid > div > div { overflow-wrap: anywhere; }
 textarea.rfq { width: 100%; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 10px;
   border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink); resize: vertical; }
+
+/* Multi-item quote board */
+.project-matrix { min-width: 760px; }
+.project-matrix td, .project-matrix th { vertical-align: top; }
+.project-matrix td:first-child { min-width: 260px; }
+.project-line { border-top: 1px solid var(--line); padding: 12px 0; }
+.project-line > b { display: block; margin-bottom: 8px; }
+.quote-form > label, .project-line > label { display: block; margin: 8px 0; }
+.quote-form input:not([type="checkbox"]), .project-line input { display: block; width: min(100%, 520px); margin-top: 4px; }

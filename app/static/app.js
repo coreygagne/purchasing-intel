@@ -215,6 +215,9 @@ function updateCostHint() {
 
 // ------------------------------------------------------------------ routing
 function route() {
+  const project = location.hash.match(/^#\/project\/(\d+)/);
+  if (project) { renderQuoteProject(Number(project[1])); return; }
+  if (location.hash === "#/projects") { renderQuoteProjects(); return; }
   const m = location.hash.match(/^#\/c\/(\d+)/);
   if (m) openComparison(Number(m[1]));
   else renderHome();
@@ -233,6 +236,8 @@ async function renderHome() {
   const [saved, recent] = await Promise.all([api("/api/comparisons?saved=true"), api("/api/searches/recent?limit=15")]);
   const savedList = saved.body || [];
   const recentList = recent.body || [];
+  view.append(h("div", { class: "actions", style: "margin-top:18px" },
+    h("a", { class: "btn", href: "#/projects" }, "Compare project quotes")));
   view.append(h("div", { class: "grid-2 home-lists", style: "margin-top:18px" },
     h("section", { class: "panel" }, h("h2", {}, "Saved comparisons"),
       savedList.length ? savedList.map((c) => h("a", { class: "listlink", href: `#/c/${c.id}` },
@@ -1560,6 +1565,127 @@ function sourcesTab(res) {
           h("td", { class: "small" }, s.fetch ? (s.fetch.ok ? (s.fetch.via ? `yes, as text via ${s.fetch.via}, copy dated ${day(s.fetch.fetched_at)} (direct: ${s.fetch.direct_error || "failed"})` : s.fetch.structured ? "yes, price data found" : "yes, no price data") : `no: ${s.fetch.error}`) : "not attempted")))))) ),
     h("section", { class: "panel" }, h("h3", {}, "Limits of this research"),
       h("ul", { class: "bullets" }, res.limits.map((l) => h("li", {}, l)))));
+}
+
+// ------------------------------------------------------------------ multi-item quote projects
+async function saveProject(p) {
+  const r = await api(`/api/quote-projects/${p.id}`, { method: "PUT", body: JSON.stringify(p) });
+  if (!r.ok) { alert(r.body?.detail || "Could not save quote project."); return; }
+  renderQuoteProject(p.id);
+}
+function pf(label, value, attrs = {}) { return h("label", {}, label, h("input", { value: value ?? "", ...attrs })); }
+async function renderQuoteProjects() {
+  document.body.classList.add("compact");
+  const view = $("#view"); view.replaceChildren(h("h1", {}, "Quote projects"));
+  const r = await api("/api/quote-projects");
+  const projects = r.ok ? r.body : [];
+  view.append(h("section", { class: "panel" }, h("h2", {}, "Saved projects"),
+    projects.length ? projects.map((p) => h("a", { class: "listlink", href: `#/project/${p.id}` }, p.title)) : h("p", {}, "No projects yet.")),
+    h("form", { class: "panel quote-form", onsubmit: async (e) => {
+      e.preventDefault(); const f = new FormData(e.currentTarget);
+      const body = { title: String(f.get("title")), ship_to: "Thunder Bay, Ontario", suppliers: [],
+        items: [{ id: "item-1", part: "", description: String(f.get("description")),
+          quantity: Number(f.get("quantity")), unit: String(f.get("unit")) }] };
+      const out = await api("/api/quote-projects", { method: "POST", body: JSON.stringify(body) });
+      if (out.ok) location.hash = `#/project/${out.body.id}`;
+      else alert(out.body?.detail || "Could not create project.");
+    } }, h("h2", {}, "New quote project"), pf("Project name", "", { name: "title", required: true }),
+      pf("First item and specifications", "", { name: "description", required: true }),
+      pf("Quantity", 1, { name: "quantity", type: "number", min: "0.001", step: "any", required: true }),
+      pf("Unit", "each", { name: "unit", required: true }),
+      h("button", { class: "btn primary", type: "submit" }, "Create project")));
+}
+function quoteSupplierEditor(p, s, i) {
+  return h("details", { class: "quote-edit" }, h("summary", {}, `Edit ${s.name} quote`),
+    h("form", { class: "quote-form", onsubmit: (e) => {
+      e.preventDefault(); const f = new FormData(e.currentTarget), next = structuredClone(p), q = next.suppliers[i];
+      for (const key of ["name", "email", "phone", "source", "notes"]) q[key] = String(f.get(key) || "").trim();
+      q.valid_until = String(f.get("valid_until") || "") || null;
+      q.shipping_cad = f.get("shipping_cad") === "" ? null : Number(f.get("shipping_cad"));
+      q.specs_confirmed = f.has("specs_confirmed"); q.lines = {};
+      for (const item of p.items) {
+        const price = f.get(`price_${item.id}`);
+        q.lines[item.id] = { unit_price_cad: price === "" ? null : Number(price),
+          part: String(f.get(`part_${item.id}`) || ""), note: String(f.get(`note_${item.id}`) || "") };
+      }
+      saveProject(next);
+    } }, pf("Supplier", s.name, { name: "name", required: true }),
+      pf("Email", s.email, { name: "email", type: "email" }), pf("Phone", s.phone, { name: "phone" }),
+      pf("Quote reference", s.source, { name: "source" }),
+      pf("Valid through", s.valid_until, { name: "valid_until", type: "date" }),
+      pf("Freight to Thunder Bay in CAD (0 only if confirmed)", s.shipping_cad,
+        { name: "shipping_cad", type: "number", min: "0", step: "0.01" }),
+      h("label", {}, h("input", { name: "specs_confirmed", type: "checkbox", checked: s.specs_confirmed }),
+        " Exact items and suitability confirmed"),
+      pf("Notes / lead time", s.notes, { name: "notes" }),
+      p.items.map((item) => h("div", { class: "project-line" }, h("b", {}, `${item.quantity} ${item.unit} ${item.description}`),
+        pf("Unit price CAD", s.lines?.[item.id]?.unit_price_cad, { name: `price_${item.id}`, type: "number", min: "0", step: "0.0001" }),
+        pf("Quoted part", s.lines?.[item.id]?.part, { name: `part_${item.id}` }),
+        pf("Line note", s.lines?.[item.id]?.note, { name: `note_${item.id}` }))),
+      h("button", { class: "btn primary", type: "submit" }, "Save supplier quote")));
+}
+async function renderQuoteProject(id) {
+  document.body.classList.add("compact"); const view = $("#view");
+  view.replaceChildren(h("p", {}, "Loading quote project..."));
+  const r = await api(`/api/quote-projects/${id}`);
+  if (!r.ok) { view.replaceChildren(h("p", {}, "Quote project not found.")); return; }
+  const p = r.body, draft = p.rfq_text, emailBody = draft.split("\n").slice(2).join("\n");
+  const status = h("span", { role: "status", class: "small muted" });
+  const matrix = h("table", { class: "simple project-matrix" },
+    h("thead", {}, h("tr", {}, h("th", {}, "Item"), p.suppliers.map((s) => h("th", {}, s.name)))),
+    h("tbody", {}, p.items.map((item) => h("tr", {},
+      h("td", {}, h("b", {}, item.description), h("div", { class: "small muted" },
+        `${item.quantity} ${item.unit}${item.part ? ` · ${item.part}` : ""}`),
+        h("button", { class: "btn small", type: "button", onclick: () => {
+          location.hash = "#/"; $("#q").value = `${item.part} ${item.description}`.trim();
+          $("#qty").value = item.quantity; $("#q").focus();
+        } }, "Research this item")),
+      p.suppliers.map((s) => { const line = s.line_results.find((x) => x.item_id === item.id);
+        return h("td", {}, line?.unit_price_cad == null ? "Not quoted" : `${money(line.unit_price_cad, "CAD")} / ${item.unit}`,
+          line?.part ? h("div", { class: "small muted" }, line.part) : null,
+          line?.note ? h("div", { class: "small muted" }, line.note) : null); }))),
+    h("tr", {}, h("th", {}, "Priced goods"), p.suppliers.map((s) => h("td", {}, money(s.goods_cad, "CAD")))),
+    h("tr", {}, h("th", {}, "Freight or pickup"), p.suppliers.map((s) => h("td", {},
+      s.shipping_cad == null ? "Unconfirmed" : money(s.shipping_cad, "CAD")))),
+    h("tr", {}, h("th", {}, "Comparable delivered total"), p.suppliers.map((s) => h("td", {},
+      s.comparable ? money(s.total_cad, "CAD") : "Incomplete")))));
+  view.replaceChildren(
+    h("section", { class: "panel" }, h("a", { href: "#/projects" }, "← Quote projects"), h("h1", {}, p.title),
+      h("p", { class: "muted" }, `Ship to ${p.ship_to}. CAD before tax.`),
+      h("p", {}, p.three_current_quotes ? "Three complete, current delivered quotes recorded." :
+        "Three complete, current delivered quotes are still needed."),
+      h("div", { class: "actions" },
+        h("button", { class: "btn primary", type: "button", onclick: async () => {
+          try { await navigator.clipboard.writeText(draft); status.textContent = "Quote request copied."; }
+          catch { prompt("Copy this quote request", draft); }
+        } }, "Copy full-basket quote request"),
+        h("a", { class: "btn", href: `mailto:?subject=${encodeURIComponent(`Request for quote - ${p.title}`)}&body=${encodeURIComponent(emailBody)}` }, "Open email draft"), status)),
+    h("section", { class: "panel" }, h("h2", {}, "Line-by-line comparison"),
+      h("p", { class: "small muted" }, "Totals require every item, current prices, confirmed specifications and Thunder Bay freight or pickup."),
+      h("div", { class: "table-wrap" }, matrix)),
+    h("section", { class: "panel" }, h("h2", {}, "Supplier responses"),
+      p.suppliers.map((s, i) => h("article", { class: "quote-option" }, h("h3", {}, s.name),
+        h("p", {}, s.comparable ? money(s.total_cad, "CAD") : s.issues.join("; ")),
+        s.source ? h("p", { class: "small muted" }, `Reference: ${s.source}`) : null,
+        s.notes ? h("p", { class: "small muted" }, s.notes) : null,
+        s.email ? h("a", { href: `mailto:${encodeURIComponent(s.email)}?subject=${encodeURIComponent(`Request for quote - ${p.title}`)}&body=${encodeURIComponent(emailBody)}` }, "Email supplier") : null,
+        s.phone ? h("p", { class: "small" }, `Phone: ${s.phone}`) : null,
+        quoteSupplierEditor(p, s, i))),
+      h("details", { class: "quote-edit" }, h("summary", {}, "Add supplier"),
+        h("form", { class: "quote-form", onsubmit: (e) => {
+          e.preventDefault(); const next = structuredClone(p), name = String(new FormData(e.currentTarget).get("name") || "").trim();
+          if (!name) return; next.suppliers.push({ name, lines: {}, shipping_cad: null, specs_confirmed: false }); saveProject(next);
+        } }, pf("Supplier name", "", { name: "name", required: true }), h("button", { class: "btn", type: "submit" }, "Add supplier")))),
+    h("section", { class: "panel" }, h("details", { class: "quote-edit" }, h("summary", {}, "Add line item"),
+      h("form", { class: "quote-form", onsubmit: (e) => {
+        e.preventDefault(); const f = new FormData(e.currentTarget), next = structuredClone(p);
+        next.items.push({ id: `item-${Date.now()}`, description: String(f.get("description")),
+          part: String(f.get("part")), quantity: Number(f.get("quantity")), unit: String(f.get("unit")) });
+        saveProject(next);
+      } }, pf("Description and specifications", "", { name: "description", required: true }),
+        pf("Reference part", "", { name: "part" }),
+        pf("Quantity", 1, { name: "quantity", type: "number", min: "0.001", step: "any", required: true }),
+        pf("Unit", "each", { name: "unit", required: true }), h("button", { class: "btn", type: "submit" }, "Add line")))));
 }
 
 // ------------------------------------------------------------------ boot
