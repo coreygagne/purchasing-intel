@@ -119,6 +119,8 @@ def assess_comparability(offers: list[Offer], tokens: list[str], quantity: int |
             reasons.append(f"price unit unclear ('{o.per_length_text}': per metre, or per 1,000 ft in the wire trade)")
         for c in o.spec_conflicts:
             reasons.append(f"different size or spec: {c}")
+        if not tokens and o.spec_missing:
+            reasons.append("listing does not confirm requested spec(s): " + ", ".join(o.spec_missing))
         if o.availability and any(w in o.availability for w in ("out of stock", "sold out", "discontinued",
                                                                 "unavailable", "not available")):
             reasons.append(f"not available to buy ({o.availability})")
