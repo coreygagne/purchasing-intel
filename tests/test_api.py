@@ -97,7 +97,7 @@ def test_full_workflow_save_reopen_export(tmp_path):
         xbytes = c.get(f"/api/comparisons/{cid}/export.xlsx").content
         wb = load_workbook(io.BytesIO(xbytes))
         assert wb.sheetnames == ["Summary", "Offers", "Sources", "Quality evidence", "Price history", "Suppliers",
-                                 "Market value", "Coverage", "Import & assumptions"]
+                                 "Three suppliers", "Quote tracker", "Market value", "Coverage", "Import & assumptions"]
         assert wb["Offers"].max_row == len(res["offers"]) + 1
         assert wb["Suppliers"].max_row == len(res["vendors"]) + 1
         summary = " ".join(str(c.value) for row in wb["Summary"].iter_rows() for c in row if c.value)

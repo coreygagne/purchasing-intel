@@ -78,11 +78,29 @@ def test_research_save_reopen_and_tabs(servers, browser):
     page.fill('input[name="cq-quantity"]', "2")
     page.click("form.clarify button[type=submit]")
     page.wait_for_url("**/#/c/*", timeout=20000)
-    page.wait_for_selector(".rec")
-    recs = page.inner_text(".recs")
-    assert "Lowest comparable price" in recs and "Best overall value" in recs
-    assert "Canadian Tire" in recs and "KMS Tools" in recs
-    assert "Recommended: best-supported option" in page.inner_text(".lead") and "KMS Tools" in page.inner_text(".lead")
+    page.wait_for_selector(".three-quotes")
+    assert "Three distinct supplier options" in page.inner_text(".three-quotes")
+    names = page.locator(".three-quotes > .quote-grid > .quote-option h3").all_inner_texts()
+    assert len(names) == len(set(names)) and len(names) >= 2
+    assert "Shipping" in page.inner_text(".three-quotes")
+    first = page.locator(".three-quotes > .quote-grid > .quote-option").first
+    first.locator("summary:has-text('Save contact details')").click()
+    contact = first.locator(".quote-form").nth(1)
+    contact.locator('input[name="email"]').fill("sales@example.test")
+    contact.locator('button[type="submit"]').click()
+    page.wait_for_selector(".three-quotes a:has-text('Draft email')")
+    first = page.locator(".three-quotes > .quote-grid > .quote-option").first
+    first.locator("summary:has-text('Record email or phone quote')").click()
+    form = first.locator(".quote-form").first
+    form.locator('select[name="status"]').select_option("received")
+    form.locator('input[name="unit_price"]').fill("100")
+    form.locator('input[name="shipping_cad"]').fill("0")
+    form.locator('input[name="specs_confirmed"]').check()
+    form.locator('button[type="submit"]').click()
+    page.wait_for_selector(".three-quotes > .quote-grid > .quote-option:has-text('Supplier response')")
+    assert "KMS Tools" in page.inner_text(".lead")
+    assert ("Price lead: delivery cost to confirm" in page.inner_text(".lead") or
+            "Recommended: best-supported option" in page.inner_text(".lead"))
     assert "Options side by side" in page.inner_text("#view") and "Market value" in page.inner_text("#view")
     assert "Assumed" in page.inner_text(".panel.assumed")
     assert page.locator("table.cmp").first.locator("tr.offer").count() == 3
@@ -114,7 +132,7 @@ def test_research_save_reopen_and_tabs(servers, browser):
     page.click("text=New search")
     page.wait_for_selector("text=TX-4400 for maintenance shop")
     page.click("text=TX-4400 for maintenance shop")
-    page.wait_for_selector(".rec")
+    page.wait_for_selector(".three-quotes")
     assert "Last researched" in page.inner_text(".result-head")
     # export links respond with files
     resp = page.request.get(servers["ready"] + page.get_attribute("text=Export Excel", "href"))
@@ -130,7 +148,7 @@ def test_research_save_reopen_and_tabs(servers, browser):
 def test_phone_width_has_no_horizontal_scroll(servers, browser):
     page = browser.new_page(viewport={"width": 390, "height": 844})
     page.goto(servers["ready"] + "/#/c/1")
-    page.wait_for_selector(".rec")
+    page.wait_for_selector(".three-quotes")
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
     page.close()
 

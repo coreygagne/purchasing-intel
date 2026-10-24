@@ -1,4 +1,4 @@
-"""Request-for-quote drafts for suppliers that quote on request or showed no price.
+"""Request-for-quote drafts for real suppliers, including those with published prices.
 
 Drafts only: nothing is sent. The buyer copies a draft or opens it in their own email program. Contact
 details come from the supplier record (each with its source); a supplier with no email gets a draft for a
@@ -13,7 +13,7 @@ from urllib.parse import quote
 from . import discovery as disc
 from . import guides
 
-MAX_DRAFTS = 8
+MAX_DRAFTS = 100
 SKIP_TYPES = {"marketplace", "business directory", "auction / surplus", "property listings", "classifieds / used"}
 
 
@@ -36,7 +36,9 @@ def rfq_drafts(vendors: list[dict[str, Any]], identity: dict[str, Any], quantity
     reqs = guides.requirements(identity.get("name") or "", answers)
     guide = guides.match(identity.get("name") or "")
     cert = _cert_line(category)
-    targets = [v for v in vendors if v["quote_opportunity"] and v["type"] not in SKIP_TYPES]
+    targets = [v for v in vendors if v["type"] not in SKIP_TYPES
+               and v.get("business_kind") != "service"
+               and (v.get("quote_opportunity") or v.get("emails") or v.get("phones") or v.get("website"))]
     drafts = []
     for v in targets[:MAX_DRAFTS]:
         email = v["emails"][0] if v["emails"] else None

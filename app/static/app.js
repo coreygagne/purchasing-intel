@@ -249,7 +249,26 @@ async function renderHome() {
           h("span", { class: s.status === "failed" ? "tag-failed" : "d" },
             s.status === "failed" ? verdictStamp({ kind: "fail", text: "Failed" }) : s.status)))
         : h("p", { class: "empty" }, "Your searches will appear here."))),
-    h("div", { style: "margin-top:18px" }, providerPanel()));
+    h("div", { style: "margin-top:18px" }, providerPanel(), backupPanel()));
+}
+
+function backupPanel() {
+  const file = h("input", { type: "file", accept: ".db,application/vnd.sqlite3", "aria-label": "Purchasing backup file" });
+  const msg = h("span", { class: "small muted", role: "status" });
+  return h("section", { class: "panel", style: "margin-top:18px" },
+    h("h2", {}, "Back up purchasing data"),
+    h("p", { class: "small muted" }, "Save your research, supplier preferences, quotes and price history as one file. Keep it in a secure place."),
+    h("div", { class: "actions" },
+      h("a", { class: "btn", href: "/api/backup.db", download: "purchasing-backup.db" }, "Download backup"),
+      file,
+      h("button", { class: "btn", type: "button", onclick: async () => {
+        if (!file.files[0]) { msg.textContent = "Choose a backup file first."; return; }
+        if (!confirm("Restore this backup? Current purchasing data will be replaced. A copy of it will be saved first.")) return;
+        const res = await fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/vnd.sqlite3" }, body: file.files[0] });
+        const body = await res.json().catch(() => ({}));
+        msg.textContent = res.ok ? "Restored. Your previous data was saved in the data/backups folder." : (body.detail || "Restore failed.");
+        if (res.ok) renderHome();
+      } }, "Restore backup"), msg));
 }
 
 // A comparison's outcome as a small ink stamp: the recommended price, or what's still needed
@@ -636,10 +655,165 @@ function renderComparison() {
   const offersById = Object.fromEntries(res.offers.map((o) => [o.id, o]));
   view.replaceChildren(
     header(comp, res),
+    threeQuotePanel(comp),
     keyFindings(res, offersById),
     comparisonTable(res),
     tabs(res),
   );
+}
+
+async function refreshComparison() {
+  const r = await api(`/api/comparisons/${state.comparison.id}`);
+  if (r.ok) { state.comparison = r.body; renderComparison(); }
+  return r;
+}
+
+function quoteField(label, key, value, type = "text") {
+  return h("label", {}, label, h("input", { name: key, type, value: value ?? "", min: type === "number" ? "0" : null,
+    step: type === "number" ? "any" : null }));
+}
+
+function quoteEditor(v, existing, comp) {
+  const profile = v.profile || {};
+  const vendor = v.vendor || {};
+  const name = v.supplier_name || vendor.name || "";
+  const key = v.supplier_key || v.key || "";
+  const email = profile.email || vendor.emails?.[0]?.value || existing?.email || "";
+  const phone = profile.phone || vendor.phones?.[0]?.value || existing?.phone || "";
+  const msg = h("span", { class: "small", role: "status" });
+  const form = h("form", { class: "quote-form", onsubmit: async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const num = (k) => f.get(k) === "" ? null : Number(f.get(k));
+    const body = { supplier_key: key || null, supplier_name: String(f.get("supplier_name") || "").trim(),
+      method: f.get("method"), status: f.get("status"), email: String(f.get("email") || "").trim() || null,
+      phone: String(f.get("phone") || "").trim() || null, quantity: num("quantity"),
+      unit_price: num("unit_price"), currency: String(f.get("currency") || "CAD").toUpperCase(),
+      fx_rate_to_cad: num("fx_rate_to_cad"), shipping_cad: num("shipping_cad"),
+      other_cad: num("other_cad") || 0, lead_days: num("lead_days"),
+      valid_until: String(f.get("valid_until") || "") || null, specs_confirmed: f.has("specs_confirmed"),
+      reference: String(f.get("reference") || "") || null, notes: String(f.get("notes") || "") || null };
+    const r = await api(`/api/comparisons/${comp.id}/quotes`, { method: "PUT", body: JSON.stringify(body) });
+    if (!r.ok) { msg.textContent = typeof r.body?.detail === "string" ? r.body.detail : "Could not save quote."; return; }
+    await refreshComparison();
+  } },
+    quoteField("Supplier", "supplier_name", name),
+    h("label", {}, "Contact method", h("select", { name: "method" }, ["email", "phone", "website", "other"].map((x) =>
+      h("option", { value: x, selected: x === (existing?.method || (email ? "email" : phone ? "phone" : "website")) }, x)))),
+    h("label", {}, "Stage", h("select", { name: "status" }, ["draft", "requested", "received", "declined"].map((x) =>
+      h("option", { value: x, selected: x === (existing?.status || "draft") }, x)))),
+    quoteField("Email", "email", email, "email"), quoteField("Phone", "phone", phone, "tel"),
+    quoteField("Quantity", "quantity", existing?.quantity ?? comp.result.quantity, "number"),
+    quoteField("Unit price", "unit_price", existing?.unit_price, "number"),
+    quoteField("Currency", "currency", existing?.currency || "CAD"),
+    quoteField("CAD per currency unit, if not CAD", "fx_rate_to_cad", existing?.fx_rate_to_cad, "number"),
+    quoteField("Shipping to Thunder Bay (CAD; enter 0 for confirmed pickup/free delivery)", "shipping_cad", existing?.shipping_cad, "number"),
+    quoteField("Other non-tax costs (CAD)", "other_cad", existing?.other_cad || 0, "number"),
+    quoteField("Lead time (days)", "lead_days", existing?.lead_days, "number"),
+    quoteField("Valid through", "valid_until", existing?.valid_until, "date"),
+    h("label", {}, h("input", { type: "checkbox", name: "specs_confirmed", checked: !!existing?.specs_confirmed }), " Exact item and specs confirmed"),
+    quoteField("Quote reference", "reference", existing?.reference),
+    h("label", {}, "Notes", h("textarea", { name: "notes", rows: "2" }, existing?.notes || "")),
+    h("div", { class: "actions" }, h("button", { class: "btn primary", type: "submit" }, "Save quote record"), msg));
+  return h("details", { class: "quote-edit" }, h("summary", {}, existing ? "Update quote / call record" : "Record email or phone quote"), form);
+}
+
+function supplierControls(candidate, comp) {
+  const v = candidate.vendor;
+  const profile = candidate.profile || {};
+  const draft = candidate.draft;
+  const email = profile.email || v.emails?.[0]?.value;
+  const phone = profile.phone || v.phones?.[0]?.value;
+  const existing = comp.quote_workflow.quotes.find((q) => q.supplier_key === candidate.key);
+  const draftLink = draft && email ? `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}` : null;
+  const pref = h("input", { type: "checkbox", checked: !!profile.preferred, onchange: async (e) => {
+    const r = await api("/api/supplier-profiles", { method: "POST", body: JSON.stringify({ supplier_key: candidate.key,
+      name: v.name, preferred: e.target.checked, email: profile.email || null, phone: profile.phone || null,
+      notes: profile.notes || null }) });
+    if (r.ok) await refreshComparison();
+  } });
+  const account = candidate.account_price;
+  const profileForm = h("form", { class: "quote-form", onsubmit: async (e) => {
+    e.preventDefault(); const f = new FormData(e.currentTarget);
+    const r = await api("/api/supplier-profiles", { method: "POST", body: JSON.stringify({
+      supplier_key: candidate.key, name: v.name, preferred: !!pref.checked,
+      email: String(f.get("email") || "").trim() || null,
+      phone: String(f.get("phone") || "").trim() || null,
+      notes: String(f.get("notes") || "") || null }) });
+    if (r.ok) await refreshComparison();
+  } }, quoteField("Email", "email", profile.email || "", "email"),
+    quoteField("Phone", "phone", profile.phone || "", "tel"),
+    quoteField("Notes", "notes", profile.notes || ""),
+    h("button", { class: "btn", type: "submit" }, "Save contact"));
+  const accountForm = h("form", { class: "quote-form", onsubmit: async (e) => {
+    e.preventDefault(); const f = new FormData(e.currentTarget);
+    const r = await api(`/api/comparisons/${comp.id}/account-prices`, { method: "PUT", body: JSON.stringify({
+      supplier_key: candidate.key, unit_price_cad: Number(f.get("unit_price_cad")),
+      unit_label: String(f.get("unit_label")), valid_until: String(f.get("valid_until")) || null,
+      notes: String(f.get("notes")) || null }) });
+    if (r.ok) await refreshComparison();
+  } }, quoteField("Account price (CAD)", "unit_price_cad", account?.unit_price_cad, "number"),
+    quoteField("Unit / pack", "unit_label", account?.unit_label || "each"),
+    quoteField("Valid through", "valid_until", account?.valid_until, "date"),
+    quoteField("Notes", "notes", account?.notes), h("button", { class: "btn", type: "submit" }, "Save account price"));
+  return h("div", { class: "supplier-controls" },
+    h("div", { class: "actions" }, draftLink ? h("a", { class: "btn primary", href: draftLink }, "Draft email") : null,
+      phone ? h("a", { class: "btn", href: telHref(phone) }, `Call ${phone}`) : null,
+      !draftLink && v.website ? link(v.website, "Contact website", "btn") : null,
+      h("label", { class: "small" }, pref, " Preferred supplier")),
+    h("div", { class: "small muted" }, email ? `Email: ${email}. ` : "Email not found. ",
+      draft?.to_basis ? `Source: ${draft.to_basis}. ` : "", phone ? `Phone: ${phone}. ` : "",
+      v.tier === "local" ? "Thunder Bay supplier; confirm pickup or delivery cost." : "Outside Thunder Bay; confirm shipping price to Thunder Bay."),
+    account ? h("p", { class: "small" }, `Your account price: ${money(account.unit_price_cad, "CAD")} per ${account.unit_label}${account.valid_until ? `, valid through ${account.valid_until}` : ""}. Confirm shipping separately.`) : null,
+    quoteEditor(candidate, existing, comp),
+    h("details", { class: "quote-edit" }, h("summary", {}, "Save contact details"), profileForm),
+    h("details", { class: "quote-edit" }, h("summary", {}, account ? "Update account price" : "Save account price"), accountForm));
+}
+
+function threeQuotePanel(comp) {
+  const flow = comp.quote_workflow;
+  if (!flow) return null;
+  const byKey = Object.fromEntries(flow.candidates.map((c) => [c.key, c]));
+  const selected = new Set(flow.best_options.map((o) => o.supplier_key));
+  const cards = flow.best_options.map((o, i) => {
+    const candidate = byKey[o.supplier_key];
+    const quote = o.kind === "supplier_quote";
+    return h("article", { class: "quote-option" },
+      h("div", { class: "small muted" }, `Option ${i + 1} · ${quote ? "Supplier response" : "Published price"}`),
+      h("h3", {}, o.supplier_name),
+      h("p", {}, o.delivered_ready ? [h("b", {}, money(o.comparison_value_cad, "CAD")), " delivered, before tax"]
+        : [h("b", {}, money(o.price_cad, "CAD")), " listed price; delivered total unavailable"]),
+      h("p", { class: "small" }, o.shipping_cad != null
+        ? `Shipping shown: ${money(o.shipping_cad, "CAD")}${o.missing_costs?.includes("shipping for requested quantity") ? "; confirm for the full requested quantity" : " to Thunder Bay"}.`
+        : "Shipping to Thunder Bay: price needed before choosing.",
+        o.missing_costs?.filter((x) => x !== "shipping").length ? ` Other unknown costs: ${o.missing_costs.filter((x) => x !== "shipping").join(", ")}.` : ""),
+      quote ? h("p", { class: "small" }, o.comparable ? "Recorded response; item, quantity and costs confirmed." : o.issues.join("; "))
+        : h("p", { class: "small" }, link(o.url, "Open published price"), ` · seen ${day(o.observed_at)}`),
+      candidate ? supplierControls(candidate, comp) : quoteEditor({ supplier_key: o.supplier_key, supplier_name: o.supplier_name }, o, comp));
+  });
+  const alternates = flow.candidates.filter((c) => !selected.has(c.key)).slice(0, Math.max(0, 3 - cards.length));
+  const watch = flow.watch || {};
+  const watchForm = h("form", { class: "watch-form", onsubmit: async (e) => {
+    e.preventDefault(); const f = new FormData(e.currentTarget);
+    const r = await api(`/api/comparisons/${comp.id}/watch`, { method: "PUT", body: JSON.stringify({
+      enabled: f.has("enabled"), interval_days: Number(f.get("interval_days")),
+      max_runs_per_month: Number(f.get("max_runs_per_month")) }) });
+    if (r.ok) await refreshComparison();
+  } }, h("label", {}, h("input", { type: "checkbox", name: "enabled", checked: !!watch.enabled }), " Recheck prices automatically"),
+    quoteField("Every (days)", "interval_days", watch.interval_days || 7, "number"),
+    quoteField("Maximum searches / month", "max_runs_per_month", watch.max_runs_per_month || 4, "number"),
+    h("button", { class: "btn", type: "submit" }, "Save recheck schedule"));
+  return h("section", { class: "panel three-quotes" },
+    h("h2", {}, "Three distinct supplier options"),
+    h("p", { class: "small muted" }, `${flow.documented_count} distinct published prices or comparable supplier responses found; ${flow.delivered_ready_count} have a complete delivered price. Published prices count as price options. A supplier response is only shown as a quote after you record it.`),
+    h("div", { class: "quote-grid" }, cards),
+    alternates.length ? h("div", {}, h("h3", {}, "Suppliers to contact for remaining prices"),
+      h("div", { class: "quote-grid" }, alternates.map((c) => h("article", { class: "quote-option" },
+        h("h3", {}, c.vendor.name), h("p", { class: "small" }, "Price or delivered total needed."), supplierControls(c, comp))))) : null,
+    flow.checks.length ? h("ul", { class: "bullets small" }, flow.checks.map((x) => h("li", {}, x))) : null,
+    h("details", { class: "quote-edit" }, h("summary", {}, "Record a supplier not in these results"),
+      quoteEditor({}, null, comp)),
+    h("details", { class: "quote-edit" }, h("summary", {}, "Automatic price rechecks (optional; uses search credits)"), watchForm));
 }
 
 function header(comp, res) {
@@ -721,7 +895,6 @@ function keyFindings(res, offersById) {
   return h("div", { class: "stack" },
     plain ? leadCard(plain, res) : null,
     res.guide ? guideCard(res.guide, (term) => { $("#q").value = term; startResearch({ query: term }); }) : null,
-    plain?.judge ? null : h("div", { class: "recs" }, recCard("lowest", rec.lowest, res, offersById), recCard("value", rec.best_value, res, offersById)),
     plain && plain.comparison.length ? picksTable(plain) : null,
     res.market_value ? marketPanel(res.market_value) : null,
     h("div", { class: "grid-2" },
@@ -769,13 +942,14 @@ function leadCard(plain, res) {
   return h("section", { class: `lead${state.entering ? " enter" : ""}` },
     h("div", { class: "lead-top" },
       h("div", {},
-        h("div", { class: "kind stamp" }, "Recommended: best-supported option"),
+        h("div", { class: "kind stamp" }, row.total_complete ? "Recommended: best-supported option" : "Price lead: delivery cost to confirm"),
         h("div", { class: "head" }, plain.lead.supplier),
         row.tier ? h("div", { class: "small muted" }, row.tier) : null),
       row.price ? h("div", { class: "figure" },
         h("div", { class: "amount" }, row.price, " ", mark(row.confidence === "low" ? "snippet" : "quoted")),
         row.total_pre_tax != null ? h("div", { class: "small" }, `${money(row.total_pre_tax, "CAD")} before tax`,
-          res.quantity ? ` for ${res.quantity}` : "", row.total_complete ? "" : ", some costs unknown") : null) : null),
+          res.quantity ? ` for ${res.quantity}` : "",
+          row.total_complete ? " delivered" : `; excludes ${(row.total_unknown || []).join(", ") || "unknown costs"}`) : null) : null),
     h("div", { class: "next" },
       h("a", { class: "btn primary", href: plain.lead.url, target: "_blank", rel: "noopener", "data-img": row.image || null }, "Open listing"),
       phone ? h("a", { class: "btn", href: telHref(phone) }, `Call ${phone}`) : null,

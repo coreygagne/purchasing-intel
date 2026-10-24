@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import json
 import logging
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,7 @@ from .export import comparison_xlsx, offers_csv
 from .llm import LlmError
 from .providers import SETUP_INSTRUCTIONS, provider_status
 from .research import ANALYSIS_VERSION, ResearchEngine, ResearchError, ResearchRequest, observation_rows, reanalyze
+from .three_quotes import supplier_key, workflow
 
 log = logging.getLogger("purchasing")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -137,6 +140,49 @@ class AssumptionsBody(BaseModel):
     quantity: int | None = Field(default=None, ge=0, le=10_000_000)
 
 
+class SupplierProfileBody(BaseModel):
+    supplier_key: str = Field(min_length=3, max_length=160, pattern=r"^(domain|name):[a-z0-9.\-]+$")
+    name: str = Field(min_length=1, max_length=200)
+    preferred: bool = False
+    email: str | None = Field(default=None, max_length=300)
+    phone: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class AccountPriceBody(BaseModel):
+    supplier_key: str = Field(min_length=3, max_length=160, pattern=r"^(domain|name):[a-z0-9.\-]+$")
+    unit_price_cad: float = Field(ge=0, le=100_000_000)
+    unit_label: str = Field(min_length=1, max_length=80)
+    valid_until: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class SupplierQuoteBody(BaseModel):
+    supplier_key: str | None = Field(default=None, max_length=160)
+    supplier_name: str = Field(min_length=1, max_length=200)
+    method: Literal["email", "phone", "website", "other"] = "email"
+    status: Literal["draft", "requested", "received", "declined"] = "draft"
+    email: str | None = Field(default=None, max_length=300)
+    phone: str | None = Field(default=None, max_length=100)
+    quantity: int | None = Field(default=None, ge=1, le=10_000_000)
+    unit_price: float | None = Field(default=None, ge=0, le=100_000_000)
+    currency: str = Field(default="CAD", pattern=r"^[A-Z]{3}$")
+    fx_rate_to_cad: float | None = Field(default=None, gt=0, le=100_000)
+    shipping_cad: float | None = Field(default=None, ge=0, le=100_000_000)
+    other_cad: float = Field(default=0, ge=0, le=100_000_000)
+    lead_days: int | None = Field(default=None, ge=0, le=3650)
+    valid_until: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    specs_confirmed: bool = False
+    reference: str | None = Field(default=None, max_length=200)
+    notes: str | None = Field(default=None, max_length=3000)
+
+
+class WatchBody(BaseModel):
+    enabled: bool = False
+    interval_days: int = Field(default=7, ge=1, le=90)
+    max_runs_per_month: int = Field(default=4, ge=1, le=20)
+
+
 @dataclass
 class Job:
     id: str
@@ -195,6 +241,18 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                      "(open it at http://127.0.0.1).")
         if "application/json" not in request.headers.get("content-type", ""):
             raise HTTPException(415, "Send the keys as JSON.")
+
+    def require_local_backup(request: Request) -> None:
+        """Backups contain supplier and purchasing data and stay on the local machine."""
+        client_host = request.client.host if request.client else ""
+        origin = request.headers.get("origin")
+        target_host = request.url.hostname or ""
+        if client_host not in LOCAL_HOSTS or target_host not in LOCAL_HOSTS:
+            raise HTTPException(403, "Backups are available only on this computer.")
+        if origin:
+            parsed = urlsplit(origin)
+            if parsed.hostname not in LOCAL_HOSTS or parsed.port != request.url.port:
+                raise HTTPException(403, "Backups require this app's own page.")
 
     @app.post("/api/setup/keys")
     async def save_keys(body: KeysBody, request: Request) -> dict[str, Any]:
@@ -381,17 +439,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 result = reanalyze(comp["result"], comp.get("assumptions") or {}, settings.home_province)
             except Exception:  # noqa: BLE001 - show the saved result rather than fail
                 log.exception("re-analysis of comparison %s failed", cid)
-                return comp
+                return comp | {"quote_workflow": workflow(comp["result"], db.quotes_for(cid),
+                                                           db.supplier_profiles(), db.watch_for(cid),
+                                                           db.account_prices_for(comp["product_key"]))}
             db.update_comparison_meta(cid, result=result)
             comp = db.get_comparison(cid)
-        return comp
+        return comp | {"quote_workflow": workflow(comp["result"], db.quotes_for(cid),
+                                                   db.supplier_profiles(), db.watch_for(cid),
+                                                   db.account_prices_for(comp["product_key"]))}
 
     @app.patch("/api/comparisons/{cid}")
     def patch_comparison(cid: int, body: ComparisonPatch) -> dict[str, Any]:
         if not db.get_comparison(cid):
             raise HTTPException(404, "Comparison not found")
         db.update_comparison_meta(cid, saved=body.saved, title=body.title, notes=body.notes)
-        return db.get_comparison(cid)
+        return get_comparison(cid)
 
     @app.put("/api/comparisons/{cid}/assumptions")
     def put_assumptions(cid: int, body: AssumptionsBody) -> dict[str, Any]:
@@ -400,7 +462,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(404, "Comparison not found")
         result = reanalyze(comp["result"], body.assumptions, settings.home_province, body.quantity)
         db.update_comparison_meta(cid, assumptions=result["assumptions"], result=result)
-        return db.get_comparison(cid)
+        return get_comparison(cid)
 
     @app.put("/api/comparisons/{cid}/filters")
     def put_filters(cid: int, body: Filters) -> dict[str, Any]:
@@ -412,7 +474,62 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         result["filters"] = body.model_dump(exclude_none=True)
         result = reanalyze(result, comp.get("assumptions") or {}, settings.home_province)
         db.update_comparison_meta(cid, result=result)
-        return db.get_comparison(cid)
+        return get_comparison(cid)
+
+    @app.post("/api/supplier-profiles")
+    def save_supplier_profile(body: SupplierProfileBody) -> dict[str, Any]:
+        return db.put_supplier_profile(body.model_dump())
+
+    @app.put("/api/comparisons/{cid}/account-prices")
+    def save_account_price(cid: int, body: AccountPriceBody) -> dict[str, Any]:
+        comp = db.get_comparison(cid)
+        if not comp:
+            raise HTTPException(404, "Comparison not found")
+        if not comp.get("product_key"):
+            raise HTTPException(400, "This comparison has no product key.")
+        return db.put_account_price(body.model_dump() | {"product_key": comp["product_key"]})
+
+    @app.put("/api/comparisons/{cid}/quotes")
+    def save_supplier_quote(cid: int, body: SupplierQuoteBody) -> dict[str, Any]:
+        if not db.get_comparison(cid):
+            raise HTTPException(404, "Comparison not found")
+        row = body.model_dump()
+        name = row["supplier_name"].strip()
+        if not name:
+            raise HTTPException(400, "Enter the supplier's name.")
+        row["supplier_name"] = name
+        if not row["supplier_key"]:
+            row["supplier_key"] = supplier_key({"name": name})
+        if not re.fullmatch(r"(domain|name):[a-z0-9.\-]{1,153}", row["supplier_key"]):
+            raise HTTPException(400, "Invalid supplier identifier.")
+        return db.put_quote(cid, row)
+
+    @app.put("/api/comparisons/{cid}/watch")
+    def save_watch(cid: int, body: WatchBody) -> dict[str, Any]:
+        if not db.get_comparison(cid):
+            raise HTTPException(404, "Comparison not found")
+        return db.put_watch(cid, body.enabled, body.interval_days, body.max_runs_per_month)
+
+    @app.get("/api/backup.db")
+    def download_backup(request: Request) -> Response:
+        require_local_backup(request)
+        return Response(db.backup_bytes(), media_type="application/vnd.sqlite3",
+                        headers={"Content-Disposition": 'attachment; filename="purchasing-backup.db"',
+                                 "Cache-Control": "no-store"})
+
+    @app.post("/api/backup/restore")
+    async def restore_backup(request: Request) -> dict[str, Any]:
+        require_local_backup(request)
+        if request.headers.get("content-type", "").split(";")[0] != "application/vnd.sqlite3":
+            raise HTTPException(415, "Choose a purchasing SQLite backup file.")
+        data = await request.body()
+        if len(data) > 100_000_000:
+            raise HTTPException(413, "The backup is larger than 100 MB.")
+        try:
+            before = db.restore_bytes(data)
+        except (ValueError, sqlite3.DatabaseError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"restored": True, "previous_copy": str(before)}
 
     @app.delete("/api/comparisons/{cid}")
     def delete_comparison(cid: int) -> dict[str, Any]:
@@ -434,6 +551,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if not comp:
             raise HTTPException(404, "Comparison not found")
         history = db.observations(product_key=comp["product_key"]) if comp.get("product_key") else []
+        comp["quote_workflow"] = workflow(comp["result"], db.quotes_for(cid), db.supplier_profiles(),
+                                          db.watch_for(cid), db.account_prices_for(comp["product_key"]))
         return Response(comparison_xlsx(comp, history),
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="comparison-{cid}.xlsx"'})
@@ -456,6 +575,50 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         rows = db.recent_searches(min(limit, 100))
         results = db.results_for([r["comparison_id"] for r in rows if r["comparison_id"]])
         return [r | {"verdict": verdict(results.get(r["comparison_id"]))} for r in rows]
+
+    async def watch_loop() -> None:
+        """Only opted-in saved comparisons are researched automatically."""
+        while True:
+            try:
+                if provider_status(settings)["ready"]:
+                    for watch in db.due_watches():
+                        month = iso()[:7]
+                        used = watch["runs_this_month"] if watch["run_month"] == month else 0
+                        if used >= watch["max_runs_per_month"]:
+                            continue
+                        if settings.monthly_budget_usd > 0 and db.month_spend() >= settings.monthly_budget_usd:
+                            continue
+                        result = watch["result"]
+                        body = ResearchBody(query=watch["query"], depth=result.get("depth") or "quick",
+                                            quantity=result.get("quantity"), force=True,
+                                            comparison_id=watch["comparison_id"],
+                                            area=result.get("area") or "both", filters=result.get("filters") or {},
+                                            answers=result.get("answers") or {})
+                        response = await start_research(body)
+                        if response.status_code == 202:
+                            db.mark_watch_started(watch["comparison_id"])
+                            job_id = json.loads(response.body)["job_id"]
+                            while jobs[job_id].status == "running":
+                                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("scheduled price recheck failed")
+            await asyncio.sleep(3600)
+
+    @app.on_event("startup")
+    async def start_watch_loop() -> None:
+        app.state.watch_task = asyncio.create_task(watch_loop())
+
+    @app.on_event("shutdown")
+    async def stop_watch_loop() -> None:
+        task = getattr(app.state, "watch_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     # ------------------------------------------------------------------ static
     @app.get("/")
