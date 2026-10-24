@@ -213,6 +213,31 @@ def comparison_xlsx(comparison: dict[str, Any], history: list[dict[str, Any]]) -
                  "; ".join(t["text"] for t in v["trade_signals"]), "; ".join(v["quote_reasons"]),
                  (drafts.get(v["id"]) or {}).get("body")] for v in result["vendors"]],
                {2: 30, 4: 34, 7: 40, 9: 40, 10: 40, 15: 50, 18: 70})
+    flow = comparison.get("quote_workflow")
+    if flow:
+        profiles = flow.get("profiles") or {}
+        _sheet(wb, "Three suppliers", ["Supplier", "Price source", "Listed unit CAD", "Shipping CAD",
+                                      "Delivered total CAD", "Delivered cost confirmed", "Missing costs",
+                                      "Email", "Phone", "Source URL", "Observed / received at"],
+               [[o["supplier_name"], "supplier response" if o["kind"] == "supplier_quote" else "published price",
+                 o.get("unit_price") if o["kind"] == "supplier_quote" else o.get("price_cad"),
+                 o.get("shipping_cad"), o.get("comparison_value_cad") if o.get("delivered_ready") else None,
+                 "yes" if o.get("delivered_ready") else "no",
+                 "; ".join(o.get("missing_costs") or o.get("issues") or []),
+                 (profiles.get(o["supplier_key"]) or {}).get("email") or o.get("email") or
+                 ((o.get("vendor") or {}).get("emails") or [{}])[0].get("value"),
+                 (profiles.get(o["supplier_key"]) or {}).get("phone") or o.get("phone") or
+                 ((o.get("vendor") or {}).get("phones") or [{}])[0].get("value"),
+                 o.get("url"), o.get("received_at") or o.get("observed_at")]
+                for o in flow["best_options"]], {1: 30, 7: 45, 10: 60})
+        _sheet(wb, "Quote tracker", ["Supplier", "Method", "Status", "Quantity", "Unit price", "Currency",
+                                     "Shipping CAD", "Other costs CAD", "Delivered total CAD", "Comparable",
+                                     "Specs confirmed", "Valid until", "Requested at", "Received at", "Reference", "Notes"],
+               [[q["supplier_name"], q["method"], q["status"], q["quantity"], q["unit_price"], q["currency"],
+                 q["shipping_cad"], q["other_cad"], q["total_cad"] if q["comparable"] else None,
+                 "yes" if q["comparable"] else "no", "yes" if q["specs_confirmed"] else "no",
+                 q["valid_until"], q["requested_at"], q["received_at"], q["reference"], q["notes"]]
+                for q in flow["quotes"]], {1: 30, 16: 50})
     mv = result.get("market_value")
     if mv:
         mrows = []

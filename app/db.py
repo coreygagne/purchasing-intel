@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -94,6 +95,64 @@ CREATE TABLE IF NOT EXISTS fx_rates (
     source TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (currency, rate_date)
+);
+
+CREATE TABLE IF NOT EXISTS supplier_profiles (
+    supplier_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    preferred INTEGER NOT NULL DEFAULT 0,
+    email TEXT,
+    phone TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_prices (
+    supplier_key TEXT NOT NULL,
+    product_key TEXT NOT NULL,
+    unit_price_cad REAL NOT NULL,
+    unit_label TEXT NOT NULL,
+    valid_until TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (supplier_key, product_key)
+);
+
+CREATE TABLE IF NOT EXISTS supplier_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comparison_id INTEGER NOT NULL REFERENCES comparisons(id) ON DELETE CASCADE,
+    supplier_key TEXT NOT NULL,
+    supplier_name TEXT NOT NULL,
+    method TEXT NOT NULL,
+    status TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    quantity INTEGER,
+    unit_price REAL,
+    currency TEXT NOT NULL DEFAULT 'CAD',
+    fx_rate_to_cad REAL,
+    shipping_cad REAL,
+    other_cad REAL NOT NULL DEFAULT 0,
+    lead_days INTEGER,
+    valid_until TEXT,
+    specs_confirmed INTEGER NOT NULL DEFAULT 0,
+    reference TEXT,
+    notes TEXT,
+    requested_at TEXT,
+    received_at TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(comparison_id, supplier_key)
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_quotes_comparison ON supplier_quotes(comparison_id);
+
+CREATE TABLE IF NOT EXISTS comparison_watches (
+    comparison_id INTEGER PRIMARY KEY REFERENCES comparisons(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    interval_days INTEGER NOT NULL DEFAULT 7,
+    max_runs_per_month INTEGER NOT NULL DEFAULT 4,
+    next_due_at TEXT,
+    run_month TEXT,
+    runs_this_month INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -359,3 +418,140 @@ class Database:
                 " VALUES (?, ?, ?, ?, ?)",
                 (currency, rate_date, rate_to_cad, source, iso()),
             )
+
+    # ------------------------------------------------------ supplier workflow
+    def supplier_profiles(self) -> dict[str, dict[str, Any]]:
+        with self.tx() as c:
+            rows = c.execute("SELECT * FROM supplier_profiles").fetchall()
+        return {r["supplier_key"]: dict(r) | {"preferred": bool(r["preferred"])} for r in rows}
+
+    def put_supplier_profile(self, row: dict[str, Any]) -> dict[str, Any]:
+        keys = ("supplier_key", "name", "preferred", "email", "phone", "notes")
+        values = [row.get(k) for k in keys]
+        values[2] = int(bool(values[2]))
+        with self.tx() as c:
+            c.execute(
+                "INSERT INTO supplier_profiles (" + ",".join(keys) + ",updated_at) VALUES (" +
+                ",".join("?" for _ in keys) + ",?) ON CONFLICT(supplier_key) DO UPDATE SET " +
+                ",".join(f"{k}=excluded.{k}" for k in keys[1:]) + ",updated_at=excluded.updated_at",
+                (*values, iso()),
+            )
+            saved = c.execute("SELECT * FROM supplier_profiles WHERE supplier_key=?", (row["supplier_key"],)).fetchone()
+        return dict(saved) | {"preferred": bool(saved["preferred"])}
+
+    def account_prices_for(self, product_key: str | None) -> dict[str, dict[str, Any]]:
+        if not product_key:
+            return {}
+        with self.tx() as c:
+            rows = c.execute("SELECT * FROM account_prices WHERE product_key=?", (product_key,)).fetchall()
+        return {r["supplier_key"]: dict(r) for r in rows}
+
+    def put_account_price(self, row: dict[str, Any]) -> dict[str, Any]:
+        keys = ("supplier_key", "product_key", "unit_price_cad", "unit_label", "valid_until", "notes")
+        with self.tx() as c:
+            c.execute("INSERT INTO account_prices (" + ",".join(keys) + ",updated_at) VALUES (?,?,?,?,?,?,?)"
+                      " ON CONFLICT(supplier_key,product_key) DO UPDATE SET unit_price_cad=excluded.unit_price_cad,"
+                      "unit_label=excluded.unit_label,valid_until=excluded.valid_until,notes=excluded.notes,"
+                      "updated_at=excluded.updated_at", (*[row.get(k) for k in keys], iso()))
+            saved = c.execute("SELECT * FROM account_prices WHERE supplier_key=? AND product_key=?",
+                              (row["supplier_key"], row["product_key"])).fetchone()
+        return dict(saved)
+
+    def quotes_for(self, comparison_id: int) -> list[dict[str, Any]]:
+        with self.tx() as c:
+            rows = c.execute("SELECT * FROM supplier_quotes WHERE comparison_id=? ORDER BY updated_at DESC, id DESC",
+                             (comparison_id,)).fetchall()
+        return [dict(r) | {"specs_confirmed": bool(r["specs_confirmed"])} for r in rows]
+
+    def put_quote(self, comparison_id: int, row: dict[str, Any]) -> dict[str, Any]:
+        keys = ("supplier_key", "supplier_name", "method", "status", "email", "phone", "quantity",
+                "unit_price", "currency", "fx_rate_to_cad", "shipping_cad", "other_cad", "lead_days",
+                "valid_until", "specs_confirmed", "reference", "notes")
+        vals = [row.get(k) for k in keys]
+        vals[14] = int(bool(vals[14]))
+        now = iso()
+        with self.tx() as c:
+            old = c.execute("SELECT requested_at,received_at FROM supplier_quotes WHERE comparison_id=? AND supplier_key=?",
+                            (comparison_id, row["supplier_key"])).fetchone()
+            requested = old["requested_at"] if old else None
+            received = old["received_at"] if old else None
+            if row["status"] in ("requested", "received") and not requested:
+                requested = now
+            if row["status"] == "received" and not received:
+                received = now
+            c.execute("INSERT INTO supplier_quotes (comparison_id," + ",".join(keys) +
+                      ",requested_at,received_at,updated_at) VALUES (" +
+                      ",".join("?" for _ in range(len(keys) + 4)) + ") ON CONFLICT(comparison_id,supplier_key)"
+                      " DO UPDATE SET " + ",".join(f"{k}=excluded.{k}" for k in keys[1:]) +
+                      ",requested_at=excluded.requested_at,received_at=excluded.received_at,"
+                      "updated_at=excluded.updated_at",
+                      (comparison_id, *vals, requested, received, now))
+            saved = c.execute("SELECT * FROM supplier_quotes WHERE comparison_id=? AND supplier_key=?",
+                              (comparison_id, row["supplier_key"])).fetchone()
+        return dict(saved) | {"specs_confirmed": bool(saved["specs_confirmed"])}
+
+    def watch_for(self, comparison_id: int) -> dict[str, Any] | None:
+        with self.tx() as c:
+            row = c.execute("SELECT * FROM comparison_watches WHERE comparison_id=?", (comparison_id,)).fetchone()
+        return dict(row) | {"enabled": bool(row["enabled"])} if row else None
+
+    def put_watch(self, comparison_id: int, enabled: bool, interval_days: int,
+                  max_runs_per_month: int) -> dict[str, Any]:
+        now = utcnow()
+        due = iso(now + timedelta(days=interval_days)) if enabled else None
+        with self.tx() as c:
+            c.execute("INSERT INTO comparison_watches (comparison_id,enabled,interval_days,max_runs_per_month,next_due_at)"
+                      " VALUES (?,?,?,?,?) ON CONFLICT(comparison_id) DO UPDATE SET enabled=excluded.enabled,"
+                      "interval_days=excluded.interval_days,max_runs_per_month=excluded.max_runs_per_month,"
+                      "next_due_at=excluded.next_due_at", (comparison_id, int(enabled), interval_days,
+                                                        max_runs_per_month, due))
+        return self.watch_for(comparison_id)
+
+    def due_watches(self) -> list[dict[str, Any]]:
+        with self.tx() as c:
+            rows = c.execute("SELECT w.*,c.query,c.result_json FROM comparison_watches w JOIN comparisons c"
+                             " ON c.id=w.comparison_id WHERE w.enabled=1 AND w.next_due_at<=?",
+                             (iso(),)).fetchall()
+        return [dict(r) | {"result": json.loads(r["result_json"])} for r in rows]
+
+    def mark_watch_started(self, comparison_id: int) -> None:
+        now = utcnow()
+        month = now.strftime("%Y-%m")
+        with self.tx() as c:
+            row = c.execute("SELECT interval_days,run_month,runs_this_month FROM comparison_watches"
+                            " WHERE comparison_id=?", (comparison_id,)).fetchone()
+            if not row:
+                return
+            count = row["runs_this_month"] if row["run_month"] == month else 0
+            c.execute("UPDATE comparison_watches SET run_month=?,runs_this_month=?,next_due_at=?"
+                      " WHERE comparison_id=?", (month, count + 1,
+                       iso(now + timedelta(days=row["interval_days"])), comparison_id))
+
+    def backup_bytes(self) -> bytes:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "purchasing-backup.db"
+            with sqlite3.connect(path) as dest, self._lock:
+                self._conn.backup(dest)
+            return path.read_bytes()
+
+    def restore_bytes(self, data: bytes) -> Path:
+        if not data.startswith(b"SQLite format 3\x00"):
+            raise ValueError("This is not a SQLite backup.")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "restore.db"
+            path.write_bytes(data)
+            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as source:
+                if source.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("The backup is damaged.")
+                names = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"searches", "comparisons", "price_observations", "supplier_quotes",
+                        "supplier_profiles", "account_prices", "comparison_watches"}.issubset(names):
+                    raise ValueError("This backup is missing purchasing data tables.")
+                backup_dir = self.path.parent / "backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                before = backup_dir / f"before-restore-{utcnow().strftime('%Y%m%d-%H%M%S')}.db"
+                with self._lock:
+                    with sqlite3.connect(before) as dest:
+                        self._conn.backup(dest)
+                    source.backup(self._conn)
+        return before

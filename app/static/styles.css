@@ -255,6 +255,25 @@ ul.bullets li + li { margin-top: 5px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .when { color: var(--ink); font-weight: 600; }
 
+.three-quotes { margin-bottom: 18px; }
+.three-quotes h2 { margin: 0 0 6px; font-size: 22px; }
+.three-quotes h3 { margin: 4px 0 8px; }
+.three-quotes p { margin: 6px 0; }
+.quote-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 12px 0; }
+.quote-option { min-width: 0; border: 1px solid var(--rule); border-top: 4px solid var(--ink); border-radius: var(--radius); padding: 14px; background: var(--sheet); }
+.quote-option:nth-child(2) { border-top-color: var(--quoted); }
+.quote-option:nth-child(3) { border-top-color: var(--est); }
+.quote-option a { overflow-wrap: anywhere; }
+.supplier-controls { margin-top: 12px; }
+.supplier-controls .actions { align-items: center; }
+.quote-edit { margin-top: 10px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.quote-edit summary { cursor: pointer; font-weight: 650; }
+.quote-form, .watch-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px 12px; margin-top: 10px; }
+.quote-form label, .watch-form label { display: grid; gap: 3px; font-size: 13px; }
+.quote-form input, .quote-form select, .quote-form textarea, .watch-form input { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--rule-strong); border-radius: 4px; background: var(--sheet); color: var(--ink); }
+.quote-form input[type="checkbox"], .watch-form input[type="checkbox"] { width: auto; }
+.quote-form label:has(input[type="checkbox"]), .watch-form label:has(input[type="checkbox"]) { display: flex; align-items: center; }
+
 /* recommendations */
 .recs { display: grid; gap: 18px; grid-template-columns: 1fr; }
 @media (min-width: 900px) { .recs { grid-template-columns: 1fr 1fr; } }
@@ -452,7 +471,8 @@ form.clarify input[type="text"], form.clarify input[type="number"] {
 .lead .kind { font-size: 14px; color: var(--ink-2); font-weight: 600; }
 /* the verdict is a provenance mark like the price marks: it lands like an ink stamp when a result opens */
 .lead .kind.stamp { display: inline-block; color: var(--quoted); border: 2px solid currentColor; border-radius: 3px;
-  padding: 2px 8px; font-weight: 700; transform: rotate(-1.5deg); transform-origin: left center; }
+  padding: 2px 8px; font-weight: 700; transform: rotate(-1.5deg); transform-origin: left center;
+  max-width: 100%; overflow-wrap: anywhere; }
 .lead.none .kind.stamp { color: var(--est); }
 .lead.enter { animation: lead-rise 0.32s ease-out both; }
 .lead.enter .kind.stamp { animation: stamp 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.25) 0.12s both; }
@@ -460,6 +480,7 @@ form.clarify input[type="text"], form.clarify input[type="number"] {
 @keyframes stamp { 0% { opacity: 0; transform: rotate(-6deg) scale(1.35); }
   60% { opacity: 1; transform: rotate(-1deg) scale(0.97); } 100% { opacity: 1; transform: rotate(-1.5deg) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .lead.enter, .lead.enter .kind.stamp { animation: none; } }
+@media (max-width: 600px) { .lead .kind.stamp { transform: none; } .lead.enter .kind.stamp { animation: none; } }
 .lead .head { font-size: 24px; font-weight: 800; font-variation-settings: "wdth" 112; margin: 8px 0 2px; overflow-wrap: anywhere; }
 .lead-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 28px; }
 .lead .figure { text-align: right; }

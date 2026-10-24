@@ -6,8 +6,8 @@ description or product link. The tool asks a few optional questions where the an
 results, then searches Thunder Bay first and works outward (Northwestern Ontario, Canada, the US, overseas)
 across the buying channels that fit the item: local suppliers, distributors, dealers, manufacturers,
 wholesale/trade, B2B marketplaces, used listings, auctions and completed sales. It follows the leads it finds,
-lists suppliers with sourced contact details, and shows a sourced comparison: the best-supported option first,
-the lowest comparable price and the best overall value, picks by channel where the evidence supports them,
+lists suppliers with sourced contact details, and shows a sourced comparison: three distinct supplier price
+options when available, the best-supported research finding, and picks by channel where the evidence supports them,
 the market value range, what each option really costs for your quantity, and what was and wasn't covered.
 
 It is a research tool, not a chatbot, and it never invents results. Every price shows where it came from and
@@ -20,6 +20,24 @@ when, and each number carries a mark:
 | **Calculated** | Arithmetic on quoted values: unit price, currency conversion (Bank of Canada rate), order totals. |
 | **Estimated** | Uses *your* stated assumptions (import shipping, duty %, surtax %, brokerage). Nothing is assumed for you. |
 | **Quote required** | The supplier doesn't publish a price ("call for price", "sign in to see price"). |
+
+## Three-supplier buying workflow
+
+Each comparison shows up to three **different suppliers**. A verified published price can be one option; it is
+labelled as a published price, not a salesperson's response. Record replies from email or phone in the quote
+form. The app tracks the requested quantity, item confirmation, price, delivery to Thunder Bay, lead time,
+validity and a quote reference. It will not count two prices from the same supplier as two options.
+
+For suppliers outside Thunder Bay, the comparison includes a delivered total only when shipping for the
+requested order is known. If shipping is missing, assumed, or quoted for only one item when more are needed,
+the card shows the listed goods price and asks you to confirm delivery cost. It never calls that partial number
+the delivered price. Other unknown import costs are flagged the same way. The **Draft email** button opens a
+request in your email app with a question about delivery cost and timing; it does not send anything.
+
+You can mark a supplier as preferred, save contact details and your account price, and enable optional price
+rechecks. Rechecks use search credits and respect the monthly spending limit and the per-comparison run cap.
+The home page also offers a SQLite backup download and restore; keep that file secure because it includes
+your purchasing records. Restore saves a copy of the current database first.
 
 If no search provider is configured, the app shows setup steps and refuses to research. There is no demo
 mode and no offline fallback.
@@ -283,7 +301,7 @@ Recommendations are always based on observed prices, never on speculative import
 
 - **Search**: pick Quick / Standard / Deep, and optionally a quantity (used for MOQ checks and order totals).
   Answer or skip the questions that appear (all optional), then research.
-- **Results**: the recommended (best-supported) option, the lowest-price and best-value cards, an "Options
+- **Results**: three distinct supplier options and the best-supported research finding, an "Options
   side by side" table (best value, lowest cost, local, wholesale, used/auction, international), the market
   value panel, "Watch out for" (conflicts, recalls, gaps), "Ways to pay less, and what to ask for", and what
   was assumed. Below that, the comparison table: choose **Details** on any row for the evidence text, FX and
@@ -295,7 +313,8 @@ Recommendations are always based on observed prices, never on speculative import
   credits/tokens used, pages read, limits).
 - **Save** names the comparison and pins it to the home page. **Search again** re-researches the same
   comparison and adds new price observations. **Export CSV / Excel**: the Excel file has Summary, Offers,
-  Sources, Quality evidence, Price history, Suppliers, Market value, Coverage and Import & assumptions sheets.
+  Sources, Quality evidence, Price history, Suppliers, Three suppliers, Quote tracker, Market value, Coverage and
+  Import & assumptions sheets.
 
 ---
 
