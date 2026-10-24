@@ -726,6 +726,7 @@ function supplierControls(candidate, comp) {
   const phone = profile.phone || v.phones?.[0]?.value;
   const existing = comp.quote_workflow.quotes.find((q) => q.supplier_key === candidate.key);
   const draftLink = draft && email ? `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}` : null;
+  const copyStatus = h("span", { class: "small muted", role: "status" });
   const pref = h("input", { type: "checkbox", checked: !!profile.preferred, onchange: async (e) => {
     const r = await api("/api/supplier-profiles", { method: "POST", body: JSON.stringify({ supplier_key: candidate.key,
       name: v.name, preferred: e.target.checked, email: profile.email || null, phone: profile.phone || null,
@@ -758,9 +759,14 @@ function supplierControls(candidate, comp) {
     quoteField("Notes", "notes", account?.notes), h("button", { class: "btn", type: "submit" }, "Save account price"));
   return h("div", { class: "supplier-controls" },
     h("div", { class: "actions" }, draftLink ? h("a", { class: "btn primary", href: draftLink }, "Draft email") : null,
+      draft ? h("button", { class: "btn", type: "button", onclick: async () => {
+        const request = `Subject: ${draft.subject}\n\n${draft.body}`;
+        try { await navigator.clipboard.writeText(request); copyStatus.textContent = "Request copied."; }
+        catch { prompt("Copy this quote request", request); copyStatus.textContent = "Copy the request from the dialog."; }
+      } }, "Copy quote request") : null,
       phone ? h("a", { class: "btn", href: telHref(phone) }, `Call ${phone}`) : null,
       !draftLink && v.website ? link(v.website, "Contact website", "btn") : null,
-      h("label", { class: "small" }, pref, " Preferred supplier")),
+      h("label", { class: "small" }, pref, " Preferred supplier"), copyStatus),
     h("div", { class: "small muted" }, email ? `Email: ${email}. ` : "Email not found. ",
       draft?.to_basis ? `Source: ${draft.to_basis}. ` : "", phone ? `Phone: ${phone}. ` : "",
       v.tier === "local" ? "Thunder Bay supplier; confirm pickup or delivery cost." : "Outside Thunder Bay; confirm shipping price to Thunder Bay."),
@@ -1211,13 +1217,21 @@ function suppliersTab(res) {
   if (!vs) return h("p", { class: "empty" }, "This comparison was saved before supplier records existed. Search again to build them.");
   const sum = res.vendor_summary || {};
   const drafts = Object.fromEntries((res.rfq_drafts || []).map((d) => [d.vendor_id, d]));
+  const candidates = Object.fromEntries((state.comparison?.quote_workflow?.candidates || []).map((c) => [c.vendor.id, c]));
   const STATUS = { published: "Published price", quote_required: "Quote on request", no_price_seen: "No price seen" };
   return h("div", { class: "stack" },
     h("p", { class: "small muted", style: "margin:0" },
       `${sum.total || 0} suppliers: ${sum.local || 0} in Thunder Bay, ${sum.with_contact || 0} with contact details, `,
       `${sum.with_published_price || 0} with a published price, ${sum.quote_opportunities || 0} worth asking for a quote. `,
       "Local suppliers first. Every contact shows where it was copied from and when; nothing is guessed."),
-    vs.length ? vs.map((v) => h("section", { class: `panel vendor tier-${v.tier || "none"}` },
+    vs.length ? vs.map((v) => {
+      const profile = candidates[v.id]?.profile;
+      const originalDraft = drafts[v.id];
+      const email = profile?.email || originalDraft?.to;
+      const draft = originalDraft && email ? { ...originalDraft, to: email,
+        to_basis: profile?.email ? "saved supplier contact" : originalDraft.to_basis,
+        mailto: `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(originalDraft.subject)}&body=${encodeURIComponent(originalDraft.body)}` } : originalDraft;
+      return h("section", { class: `panel vendor tier-${v.tier || "none"}` },
       h("div", { class: "vhead" },
         h("h3", {}, v.website ? link(v.website, v.name) : v.name),
         h("span", { class: `badge ${v.tier === "local" ? "exact" : ""}`, title: v.tier_basis || "" }, v.tier_label),
@@ -1232,7 +1246,13 @@ function suppliersTab(res) {
           v.address ? contactLine(v.address, "address") : null,
           v.phones.map((p) => contactLine(p, "phone")),
           v.emails.map((e) => contactLine(e, "email")),
-          !v.address && !v.phones.length && !v.emails.length ? h("p", { class: "empty", style: "margin:0" }, "No contact details found in the sources.") : null,
+          profile?.email && !v.emails.some((e) => e.value.toLowerCase() === profile.email.toLowerCase())
+            ? h("div", {}, h("a", { href: `mailto:${profile.email}` }, profile.email), " from saved supplier contact") : null,
+          profile?.phone && !v.phones.some((p) => p.value.replace(/\D/g, "") === profile.phone.replace(/\D/g, ""))
+            ? h("div", {}, h("a", { href: telHref(profile.phone) }, profile.phone), " from saved supplier contact") : null,
+          profile?.notes ? h("div", { class: "small muted" }, profile.notes) : null,
+          !v.address && !v.phones.length && !v.emails.length && !profile?.email && !profile?.phone
+            ? h("p", { class: "empty", style: "margin:0" }, "No contact details found in the sources.") : null,
           v.map_listing ? h("div", { class: "small" }, link(v.map_listing, "Google Maps listing")) : null,
           v.rating ? h("div", { class: "small muted" }, `${v.rating.value}/5 from ${v.rating.count ?? "?"} reviews (${v.rating.basis})`) : null),
         h("div", {},
@@ -1249,7 +1269,7 @@ function suppliersTab(res) {
             : h("p", { class: "empty", style: "margin:0" }, v.business_kind === "service"
               ? "A contractor or service, not a supplier: listed for reference. For the material alone, supply houses are usually cheaper."
               : "Published price available."),
-          drafts[v.id] ? rfqBox(drafts[v.id]) : null))))
+          draft ? rfqBox(draft) : null))); })
       : h("p", { class: "empty" }, "No suppliers were identified."));
 }
 function rfqBox(d) {

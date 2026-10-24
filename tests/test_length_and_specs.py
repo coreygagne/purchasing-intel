@@ -9,7 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import extract as ex
+from app import analysis as an
 from app.config import Settings
+from app.evidence import Offer, apply_match
 from app.main import create_app
 from tests.fakeweb import FakeWeb, jsonld_page, tavily_result
 from tests.test_api import research
@@ -78,16 +80,16 @@ def test_cable_request_compares_per_foot_and_recommends_a_listing_that_states_th
     one_c = by_host(res, "nassaunationalcable")
     assert any("1-conductor" in r for r in one_c["exclusion_reasons"])
 
-    # the CAD 8.42 page is sold by the foot but never says 500 kcmil or 3-conductor: not recommended
+    # The CAD 8.42 page does not establish the requested size or conductor count.
     solex = by_host(res, "solexpower")
-    assert (solex["price"], solex["per_length"], solex["comparable"]) == (8.42, "ft", True)
+    assert (solex["price"], solex["per_length"], solex["comparable"]) == (8.42, "ft", False)
     assert solex["spec_missing"] == ["500 kcmil", "3-conductor"]
+    assert any("listing does not confirm requested spec(s)" in x for x in solex["exclusion_reasons"])
     rec = res["recommendations"]
     assert rec["basis"] == "price per foot (CAD)"
     assert rec["lowest"]["offer_id"] == ontario["id"] and rec["best_value"]["offer_id"] != solex["id"]
     assert rec["lowest"]["order_total_cad"] == 22950.0 and rec["lowest"]["unit"] == "per ft"
     assert any("For 300 ft: about CAD 22,950.00" in e for e in rec["lowest"]["explanation"])
-    assert any("don't state all of: 500 kcmil, 3-conductor, copper" in n for n in rec["notes"])
 
 
 def test_implausibly_low_price_is_set_aside_even_when_it_states_the_specs(tmp_path):
@@ -145,6 +147,23 @@ def test_spec_conflicts_for_an_everyday_item(listing, conflict):
     req, _ = ex.request_specs("12/3 outdoor extension cord 50 ft")
     got = ex.spec_check(req, listing)["conflicts"]
     assert (got[0] if got else None) == conflict
+
+
+def test_unconfirmed_requested_length_cannot_be_a_price_match():
+    specs, order_length = ex.request_specs("aluminum boom gate 24 feet")
+    assert order_length is None
+    offer = Offer(id="O1", source_id=None, url="https://supplier.example/boom", supplier="Supplier",
+                  supplier_domain="supplier.example", supplier_type="retailer", supplier_in_directory=False,
+                  country="CA", country_basis="stated", product_title="Universal Aluminium Boom Barrier",
+                  price=1126.90, price_high=None, currency="CAD", currency_basis="stated",
+                  price_text="$1,126.90", price_type="listed", price_basis="structured_data",
+                  evidence_quote=None, observed_at="2026-10-24T00:00:00Z", provider="page")
+    apply_match([offer], [], {}, specs)
+    offer.price_cad = offer.price
+    an.assess_comparability([offer], [], quantity=1)
+    assert offer.spec_missing == ["24 ft"]
+    assert not offer.comparable
+    assert an.recommend([offer], [], specs=specs)["lowest"] is None
 
 
 def test_aluminum_armour_is_not_an_aluminum_conductor():
